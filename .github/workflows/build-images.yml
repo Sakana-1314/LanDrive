@@ -160,9 +160,11 @@ jobs:
           file: ./web/Dockerfile
           platforms: linux/amd64
           push: true
-          # 不传 VITE_API_BASE_URL：镜像保持"地址无关"，
-          # 部署时通过 LANDRIVE_API_BASE_URL 环境变量在容器启动时注入。
+          # HOST 为后端域名（仓库变量 vars.API_HOST，可为空）。
+          # 留空时镜像仍可用：部署时用 LANDRIVE_API_BASE_URL 环境变量在启动时注入。
+          # 注意：工作流文件公开可见，绝不在此硬编码内网域名。
           build-args: |
+            HOST=${{ vars.API_HOST }}
             VITE_API_PROBE_TIMEOUT=6000
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE }}:web

@@ -5,7 +5,7 @@
 
 - 后端：Go + Gin + MySQL，单二进制，**部署在内网**，只提供 `/api/**`
 - 前端：Vue 3 + TypeScript + Vite + Vue Router + Naive UI，**部署在公网**静态托管
-- 两者**分离部署、跨域通信**：前端通过 `VITE_API_BASE_URL` 指向内网 API，
+- 两者**分离部署、跨域通信**：前端通过构建期 `HOST` 指向内网 API（或用运行时 `LANDRIVE_API_BASE_URL` 覆盖），
   后端通过 `LANDRIVE_CORS_ALLOW` 白名单放行前端域名
 - 数据根目录：默认 `./data`，容器内 `/data`，由 `LANDRIVE_DATA_DIR` 指定
 
@@ -337,7 +337,7 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `VITE_API_BASE_URL` | `/api` | 内网 API 完整地址（含 `/api`）；公网部署必设 |
+| `HOST` | 空 | 后端域名（仅 origin，不含 `/api`），构建期注入；留空走同源 `/api` |
 | `VITE_API_PROBE_TIMEOUT` | `6000` | 连通性探测超时（毫秒） |
 | `VITE_DEV_API_TARGET` | `http://127.0.0.1:8080` | 仅开发态 vite 代理目标 |
 
@@ -345,10 +345,10 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `LANDRIVE_API_BASE_URL` | 构建期值 | 容器启动时写入 `/config.js`，优先级高于构建期 `VITE_API_BASE_URL` |
+| `LANDRIVE_API_BASE_URL` | 构建期值 | 容器启动时写入 `/config.js`，优先级高于构建期 `HOST` |
 | `LANDRIVE_API_PROBE_TIMEOUT` | `6000` | 运行时覆盖探测超时（毫秒） |
 
-API 地址解析优先级：**运行时 `/config.js` → 构建期 `VITE_API_BASE_URL` → 同源 `/api`**，
+API 地址解析优先级：**运行时 `/config.js` → 构建期 `HOST`（拼成 `${HOST}/api`）→ 同源 `/api`**，
 实现只在 `web/src/api/index.ts` 的 `resolveApiBaseUrl`。
 
 连通性探测：登录页与路由守卫调用 `GET /api/health`，用它区分

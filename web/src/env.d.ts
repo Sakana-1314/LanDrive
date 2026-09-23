@@ -1,5 +1,14 @@
 /// <reference types="vite/client" />
 
+/**
+ * 后端域名，由 vite.config.ts 从构建期环境变量 HOST 注入（如 https://files.example.com）。
+ * 仅 origin，不含 /api；为空串表示走同源 /api。
+ */
+declare const __API_HOST__: string
+
+/** 接口连通性探测超时（毫秒），由构建期环境变量 VITE_API_PROBE_TIMEOUT 注入。 */
+declare const __API_PROBE_TIMEOUT__: number
+
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
   const component: DefineComponent<{}, {}, any>

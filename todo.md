@@ -23,7 +23,7 @@
      （SPA 回退、`/config.js` 禁缓存、assets 长缓存）+ `docker-entrypoint.d/40-lan-drive-config.sh`。
      关键设计：**运行时注入 API 地址**——镜像保持"地址无关"，同一 tag 可部署到任意环境，
      换内网地址只需 `LANDRIVE_API_BASE_URL` 重启容器，无需重新构建。
-     前端地址解析优先级：运行时 `/config.js` → 构建期 `VITE_API_BASE_URL` → 同源 `/api`。
+     前端地址解析优先级：运行时 `/config.js` → 构建期后端域名 → 同源 `/api`（原用 `VITE_API_BASE_URL`，P12 起改为 `HOST`）。
   3. **自动测试**（`test.yml`）：变更路径检测 + 后端起 MySQL 8.0 service 跑单元与集成测试 +
      前端 typecheck/网络判定单测/生产构建（并校验产物含固定提示文案）；汇总 job `测试通过`。
   4. **自动构建镜像**（`build-images.yml`）：推送 ghcr，**固定 tag `:server` / `:web`**，
