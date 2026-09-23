@@ -187,6 +187,20 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		return
 	}
 
+	// 目录名用工号，所以要先确认这个目录没被别的账号占着。
+	// 必须挡的原因：**存量数据的目录是早期的 users/<id>**，因此纯数字工号
+	// （如 "1"、"5"）会与旧目录同名，两个账号共用一个磁盘目录、
+	// 互相看到对方的文件。这里在建账号之前拦下来。
+	wantedDir := storage.UserDirRel(req.EmployeeNo)
+	if inUse, err := h.store.DirRelInUse(c.Request.Context(), wantedDir, 0); err != nil {
+		failErr(c, err, "检查用户目录是否可用失败")
+		return
+	} else if inUse {
+		fail(c, http.StatusConflict,
+			fmt.Sprintf("目录 %s 已被其他账号占用（多为早期按编号分配的目录）。请换一个工号，或先迁移该账号的目录", wantedDir))
+		return
+	}
+
 	u := &model.User{
 		EmployeeNo: req.EmployeeNo,
 		Name:       req.Name,

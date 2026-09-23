@@ -319,7 +319,7 @@ onMounted(load)
     <n-modal v-model:show="showCreate" preset="card" title="新建账号" :style="{ width: isMobile ? '92vw' : '460px' }">
       <n-form ref="createRef" label-placement="left" label-width="80">
         <n-form-item label="工号">
-          <n-input v-model:value="createForm.employee_no" placeholder="登录用，也是文件目录名，创建后不可修改" />
+          <n-input v-model:value="createForm.employee_no" placeholder="登录用；也是文件目录名，创建后不可修改" />
         </n-form-item>
         <n-form-item label="姓名">
           <n-input v-model:value="createForm.name" placeholder="用于展示，允许重名" />

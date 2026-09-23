@@ -792,6 +792,40 @@ func createTestUser(t *testing.T, st *Store, employeeNo, name string) *model.Use
 	return u
 }
 
+// TestDirRelInUse 覆盖「目录名与工号一一对应」的冲突检测。
+//
+// 存量数据的目录是早期的 users/<id>，因此纯数字工号会与旧目录同名，
+// 建账号前必须能识别出来，否则两个账号会共用一个磁盘目录。
+func TestDirRelInUse(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	alice := createTestUser(t, st, "70001", "已有账号")
+
+	// 自己占用的目录：排除自己时应为 false，不排除时为 true。
+	inUse, err := st.DirRelInUse(ctx, alice.DirRel, 0)
+	if err != nil {
+		t.Fatalf("DirRelInUse: %v", err)
+	}
+	if !inUse {
+		t.Fatalf("已存在的目录 %s 应被判为占用", alice.DirRel)
+	}
+	inUse, err = st.DirRelInUse(ctx, alice.DirRel, alice.ID)
+	if err != nil {
+		t.Fatalf("DirRelInUse(exclude self): %v", err)
+	}
+	if inUse {
+		t.Fatalf("排除自己后不应算占用")
+	}
+	// 没人用的目录应放行。
+	inUse, err = st.DirRelInUse(ctx, "users/99999", 0)
+	if err != nil {
+		t.Fatalf("DirRelInUse: %v", err)
+	}
+	if inUse {
+		t.Fatalf("空闲目录不应被判为占用")
+	}
+}
+
 // TestSoftDeleteAllByOwner 覆盖删除账号前的「清理文件」步骤。
 //
 // 需求：删除用户必须先清理其所有文件（软删除即可）。

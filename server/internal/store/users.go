@@ -88,6 +88,22 @@ func (s *Store) CountAdmins(ctx context.Context) (int64, error) {
 	return n, err
 }
 
+// DirRelInUse 报告某个目录相对路径是否已被其他账号占用（excludeID 用于排除自己）。
+//
+// 存在的意义：目录名与工号一一对应，但**存量数据的目录是早期的 users/<id>**。
+// 因此新账号若取到形如 "1"、"5" 这样的纯数字工号，就会与旧目录同名，
+// 两个账号共用一个磁盘目录 —— 各自都会看到对方的文件。
+// 建账号前必须先挡住这种冲突。
+func (s *Store) DirRelInUse(ctx context.Context, dirRel string, excludeID int64) (bool, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE dir_rel = ? AND id <> ?`, dirRel, excludeID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ListUsers 分页查询账号，附带 active 文件数与占用字节。
 // q 同时匹配工号与姓名。
 func (s *Store) ListUsers(ctx context.Context, q string, page, pageSize int) ([]model.User, int64, error) {
