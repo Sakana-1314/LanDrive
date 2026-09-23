@@ -49,6 +49,8 @@ const props = withDefaults(
     keyword?: string
     /** 搜索框占位文案 */
     searchPlaceholder?: string
+    /** 当前列表归属（选中的用户名 / 全部人员）；为空则不显示 */
+    title?: string
   }>(),
   {
     loading: false,
@@ -57,7 +59,8 @@ const props = withDefaults(
     adminMode: false,
     readonly: false,
     keyword: '',
-    searchPlaceholder: '搜索文件名、姓名或工号'
+    searchPlaceholder: '搜索文件名、姓名或工号',
+    title: ''
   }
 )
 
@@ -278,6 +281,10 @@ const pagination = computed(() => ({
 
 <template>
   <div class="file-list">
+    <!-- 当前归属：从菜单子 tab 进来时，顶栏只显示"全部文件"，
+         这里补上具体是谁，否则用户不知道自己在看谁的目录 -->
+    <div v-if="title" class="list-title">{{ title }}</div>
+
     <!-- 工具栏：搜索 + 刷新。移动端自动折成两行（搜索占满一行）。 -->
     <div class="toolbar">
       <n-input
@@ -425,6 +432,13 @@ const pagination = computed(() => ({
 </template>
 
 <style scoped>
+.list-title {
+  margin-bottom: var(--space-md);
+  color: var(--color-text-strong);
+  font-size: 16px;
+  font-weight: 650;
+}
+
 .toolbar {
   display: flex;
   align-items: center;

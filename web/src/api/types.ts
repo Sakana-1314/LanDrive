@@ -91,19 +91,10 @@ export interface OwnerAggregate {
   dir_rel: string
   file_count: number
   used_bytes: number
+  /** 当前登录账号是否置顶了这个人的目录（置顶是每人各一份）。 */
+  pinned: boolean
 }
 
-export interface LogEntry {
-  id: number
-  user_id: number | null
-  employee_no: string
-  action: string
-  target_type: string
-  target_id: string
-  detail: string
-  ip: string
-  created_at: string
-}
 
 export interface Paged<T> {
   items: T[]

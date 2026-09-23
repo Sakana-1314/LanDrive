@@ -5,7 +5,16 @@
 //   桌面（>768px）：侧栏常驻，可折叠到 64px 图标栏；
 //   移动（≤768px）：侧栏收进抽屉，顶栏高度与内边距同步收窄。
 // 这样窄屏不会出现「侧栏吃掉一半宽度、内容挤成一条」的情况。
-import { computed, h, ref, watch, type Component as VueComponent } from 'vue'
+import {
+  computed,
+  defineComponent,
+  h,
+  onMounted,
+  ref,
+  watch,
+  type Component as VueComponent,
+  type PropType
+} from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   NAvatar,
@@ -23,22 +32,24 @@ import {
 } from 'naive-ui'
 import {
   CheckmarkOutline,
-  CloudUploadOutline,
   DocumentTextOutline,
   FolderOpenOutline,
+  HardwareChipOutline,
   LogOutOutline,
   MenuOutline,
   MoonOutline,
   PersonCircleOutline,
   PersonOutline,
+  Pin,
+  PinOutline,
   ServerOutline,
-  SettingsOutline,
-  StatsChartOutline,
-  SunnyOutline,
-  TimeOutline
+  SpeedometerOutline,
+  SunnyOutline
 } from '@vicons/ionicons5'
 import { clearToken } from '@/api'
+import type { OwnerAggregate } from '@/api/types'
 import { clearUser, isAdmin, state } from '@/stores/user'
+import { loadOwners, ownersState, togglePin } from '@/stores/owners'
 import { formatBytes } from '@/utils/format'
 import { setThemeMode, themeState, useIsNarrow, useIsMobile } from '@/utils/themeState'
 
@@ -75,31 +86,81 @@ function closeDrawerOnMobile() {
   if (isMobile.value) drawerOpen.value = false
 }
 
+/**
+ * 图钉按钮：点一下切换置顶。
+ * stopPropagation 必须加 —— 否则点击会同时被 n-menu 当成"选中该项"而触发导航。
+ */
+const PinToggle = defineComponent({
+  props: { owner: { type: Object as PropType<OwnerAggregate>, required: true } },
+  setup(props) {
+    return () =>
+      h(
+        NIcon,
+        {
+          size: 15,
+          // 行内样式而非 scoped class：该节点由渲染函数产出，
+          // n-menu 的 extra 区域不受 scoped 属性覆盖（同一文件既有的做法）。
+          style: {
+            color: props.owner.pinned ? 'var(--color-primary)' : 'var(--color-text-muted)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            // 触控目标偏小，补一点内边距，移动端也好点
+            padding: '2px',
+            borderRadius: '4px'
+          },
+          title: props.owner.pinned ? '取消置顶' : '置顶',
+          onClick: (e: MouseEvent) => {
+            e.stopPropagation()
+            e.preventDefault()
+            togglePin(props.owner.user_id)
+          }
+        },
+        { default: () => h(props.owner.pinned ? Pin : PinOutline) }
+      )
+  }
+})
+
+// 「全部文件」是父级 tab，展开后按用户列出子 tab —— 想找谁的文件直接点，
+// 不必先进入列表再用筛选器找。置顶的用户排在前面（顺序由服务端给）。
 const menuOptions = computed<MenuOption[]>(() => {
-  const opts: MenuOption[] = [
+  const children: MenuOption[] = [
     {
-      label: () => h(RouterLink, { to: '/files' }, { default: () => '全部文件' }),
+      label: () => h(RouterLink, { to: '/files' }, { default: () => '全部人员' }),
       key: '/files',
-      icon: renderIcon(FolderOpenOutline)
+      icon: renderIcon(PersonCircleOutline)
     },
+    ...ownersState.items.map((o) => ({
+      // label 里直接带文件数与占用：省掉一行说明，也让"谁的文件多"一眼可见
+      label: () =>
+        h(RouterLink, { to: `/files?owner=${o.user_id}` }, {
+          default: () => `${o.name} · ${o.file_count}`
+        }),
+      key: `/files?owner=${o.user_id}`,
+      // 图钉即置顶开关：功能显而易见，不需要额外文案
+      extra: () => h(PinToggle, { owner: o })
+    }))
+  ]
+
+  const opts: MenuOption[] = [
     {
       label: () => h(RouterLink, { to: '/files/mine' }, { default: () => '我的文件' }),
       key: '/files/mine',
       icon: renderIcon(DocumentTextOutline)
     },
     {
-      label: () => h(RouterLink, { to: '/upload' }, { default: () => '上传文件' }),
-      key: '/upload',
-      icon: renderIcon(CloudUploadOutline)
+      label: '全部文件',
+      key: 'files-group',
+      icon: renderIcon(FolderOpenOutline),
+      children
     }
   ]
   if (isAdmin()) {
     opts.push(
       { type: 'divider', key: 'd1' },
       {
-        label: () => h(RouterLink, { to: '/admin/dashboard' }, { default: () => '统计看板' }),
-        key: '/admin/dashboard',
-        icon: renderIcon(StatsChartOutline)
+        label: () => h(RouterLink, { to: '/admin/workbench' }, { default: () => '工作台' }),
+        key: '/admin/workbench',
+        icon: renderIcon(SpeedometerOutline)
       },
       {
         label: () => h(RouterLink, { to: '/admin/users' }, { default: () => '用户管理' }),
@@ -112,34 +173,40 @@ const menuOptions = computed<MenuOption[]>(() => {
         icon: renderIcon(ServerOutline)
       },
       {
-        label: () => h(RouterLink, { to: '/admin/logs' }, { default: () => '审计日志' }),
-        key: '/admin/logs',
-        icon: renderIcon(TimeOutline)
-      },
-      {
-        label: () => h(RouterLink, { to: '/admin/settings' }, { default: () => '系统配置' }),
+        label: () => h(RouterLink, { to: '/admin/settings' }, { default: () => '系统管理' }),
         key: '/admin/settings',
-        icon: renderIcon(SettingsOutline)
+        icon: renderIcon(HardwareChipOutline)
       }
     )
   }
   return opts
 })
 
+// 子项 key 形如 /files?owner=<id>，因此选中态要带查询串；
+// 管理员页面则直接用路径。
 const activeKey = computed(() => {
   if (route.path.startsWith('/admin/')) return route.path
-  if (route.path === '/files/mine') return '/files/mine'
+  if (route.path === '/files') {
+    const owner = route.query.owner
+    return owner ? `/files?owner=${owner}` : '/files'
+  }
   return route.path
 })
 
+// 「全部文件」默认展开：用户子 tab 是主要导航方式，收起等于藏起来。
+// 用受控变量而非 default-expanded-keys，否则导航后会被 n-menu 收回。
+const expandedKeys = ref<string[]>(['files-group'])
+watch(
+  () => route.path,
+  (p) => {
+    if (p.startsWith('/files') && !expandedKeys.value.includes('files-group')) {
+      expandedKeys.value = [...expandedKeys.value, 'files-group']
+    }
+  }
+)
+
 /** 当前页面标题（移动端顶栏显示，替代面包屑）。 */
 const pageTitle = computed(() => (route.meta.title as string) || '局域网文件助手')
-
-const myUsage = computed(() => {
-  const u = state.user
-  if (!u) return ''
-  return `${u.file_count} 个文件 · ${formatBytes(u.used_bytes)}`
-})
 
 /** 用户菜单：外观三档 + 个人设置 + 退出。外观档位显示对勾，避免再放一个独立切换键。 */
 const themeOptions = computed<MenuOption[]>(() => {
@@ -160,13 +227,37 @@ const themeOptions = computed<MenuOption[]>(() => {
   }))
 })
 
+const myUsage = computed(() => {
+  const u = state.user
+  if (!u) return ''
+  return `${u.file_count} 个文件 · ${formatBytes(u.used_bytes)}`
+})
+
 const userOptions = computed<MenuOption[]>(() => [
-  { type: 'group', key: 'g-theme', label: '外观', children: themeOptions.value },
-  { type: 'divider', key: 'd1' },
+  {
+    // 使用量放进悬浮菜单：它属于"我的账号信息"，常驻顶栏只是占地方。
+    key: 'usage',
+    type: 'render',
+    render: () =>
+      h('div', { class: 'menu-usage' }, [
+        h('div', { class: 'menu-usage__name' }, state.user?.name || ''),
+        h('div', { class: 'menu-usage__sub' }, myUsage.value)
+      ])
+  },
+  { type: 'divider', key: 'd-usage' },
+  // 外观做成二级悬浮菜单（普通项带 children，Naive UI 自动渲染箭头与级联面板），
+  // 比原来平铺三项更省空间，也符合"设置类选项收进子菜单"的惯例。
+  { label: '外观', key: 'theme', icon: renderIcon(SunnyOutline), children: themeOptions.value },
   { label: '个人设置', key: 'profile', icon: renderIcon(PersonOutline) },
   { type: 'divider', key: 'd2' },
   { label: '退出登录', key: 'logout', icon: renderIcon(LogOutOutline) }
 ])
+
+// 进入主框架即拉取用户目录（顶栏与菜单都要用），失败不弹错：
+// 菜单缺子项不影响其它功能，页面内的请求会各自给出提示。
+onMounted(() => {
+  loadOwners().catch(() => {})
+})
 
 function onUserSelect(key: string) {
   if (key.startsWith('theme:')) {
@@ -218,6 +309,7 @@ function confirmLogout() {
         <span v-if="!collapsed" class="brand-text">局域网文件助手</span>
       </div>
       <n-menu
+        v-model:expanded-keys="expandedKeys"
         :value="activeKey"
         :collapsed="collapsed"
         :collapsed-width="64"
@@ -255,7 +347,6 @@ function confirmLogout() {
         </div>
 
         <div class="topbar-actions">
-          <span v-if="!isMobile" class="usage">{{ myUsage }}</span>
           <n-dropdown :options="userOptions" trigger="click" placement="bottom-end" @select="onUserSelect">
             <button type="button" class="user-trigger" aria-label="打开用户菜单">
               <n-avatar round :size="32" class="avatar">
@@ -286,6 +377,7 @@ function confirmLogout() {
         <span class="brand-text">局域网文件助手</span>
       </div>
       <n-menu
+        v-model:expanded-keys="expandedKeys"
         :value="activeKey"
         :options="menuOptions"
         :indent="18"
@@ -371,11 +463,6 @@ function confirmLogout() {
   flex: none;
   align-items: center;
   gap: 10px;
-}
-
-.usage {
-  color: var(--color-text-muted);
-  font-size: 13px;
 }
 
 /* 顶栏弱图标按钮：触控目标 ≥40px，移动端也好点 */

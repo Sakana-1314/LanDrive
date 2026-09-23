@@ -11,8 +11,9 @@ const PORT = Number(process.argv[2] || 18081)
 
 const USERS = [
   { id: 1, employee_no: '1001', name: '张伟', role: 'admin', enabled: true, dir_rel: 'users/1', file_count: 4, used_bytes: 12345678, last_login_at: '2026-09-23T02:25:00Z', created_at: '2026-01-05T02:00:00Z' },
-  { id: 2, employee_no: '1002', name: '李静', role: 'user', enabled: true, dir_rel: 'users/2', file_count: 4, used_bytes: 8765432, last_login_at: null, created_at: '2026-01-06T02:00:00Z' },
+  { id: 2, employee_no: '1002', name: '李静', role: 'user', enabled: true, dir_rel: 'users/2', file_count: 4, used_bytes: 8765432, last_login_at: null, created_at: '2026-01-06T02:00:00Z', pinned: true },
   { id: 3, employee_no: '1003', name: '王强', role: 'user', enabled: false, dir_rel: 'users/3', file_count: 4, used_bytes: 2345678, last_login_at: null, created_at: '2026-01-07T02:00:00Z' }
+
 ]
 
 const NAMES = [
@@ -50,17 +51,6 @@ const SETTINGS = {
   trash_days: 7, chunk_size_mb: 4, upload_enabled: true
 }
 
-const LOGS = Array.from({ length: 20 }, (_, i) => ({
-  id: i + 1,
-  user_id: (i % 3) + 1,
-  employee_no: USERS[i % 3].employee_no,
-  action: ['login', 'upload', 'download', 'delete', 'rename'][i % 5],
-  target: '车间设备巡检记录表.xlsx',
-  detail: '示例操作详情',
-  ip: `10.110.34.${100 + i}`,
-  created_at: new Date(Date.now() - i * 600000).toISOString()
-}))
-
 const json = (res, data, status = 200) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(data))
@@ -84,9 +74,20 @@ http
       return json(res, {
         items: USERS.map((u) => ({
           user_id: u.id, name: u.name, employee_no: u.employee_no,
-          file_count: u.file_count, used_bytes: u.used_bytes
-        }))
+          file_count: u.file_count, used_bytes: u.used_bytes,
+          // 置顶状态由服务端给出并决定排序
+          pinned: !!u.pinned
+        })).sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.user_id - b.user_id)
       })
+    // 置顶切换：mock 里也真正改状态，便于端到端验证"点击 → 顺序变化"
+    const pinMatch = p.match(/^\/api\/files\/owners\/(\d+)\/pin$/)
+    if (pinMatch) {
+      const id = Number(pinMatch[1])
+      const target = USERS.find((u) => u.id === id)
+      if (target) target.pinned = req.method === 'PUT'
+      res.writeHead(204)
+      return res.end()
+    }
     if (p === '/api/uploads/config')
       return json(res, {
         allow_all: true, allowed_extensions: null, chunk_size: 4194304, chunk_size_mb: 4,
@@ -99,8 +100,6 @@ http
       })
     if (p === '/api/admin/users') return json(res, { items: USERS, total: USERS.length, page: 1, page_size: 20 })
     if (p === '/api/admin/files') return json(res, { items: FILES, total: FILES.length, page: 1, page_size: 20 })
-    if (p === '/api/admin/logs') return json(res, { items: LOGS, total: LOGS.length, page: 1, page_size: 30 })
-    if (p === '/api/admin/logs/actions') return json(res, ['login', 'upload', 'download'])
     if (p === '/api/admin/settings') return json(res, SETTINGS)
 
     json(res, { error: 'not found', path: p }, 404)

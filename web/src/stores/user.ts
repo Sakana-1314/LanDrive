@@ -2,6 +2,7 @@
 import { reactive } from 'vue'
 import type { Settings, User } from '@/api/types'
 import { fetchMe, getToken, isNetworkError } from '@/api'
+import { clearOwners } from '@/stores/owners'
 
 interface State {
   user: User | null
@@ -70,6 +71,9 @@ export function clearUser(): void {
   state.user = null
   state.settings = null
   state.ready = true
+  // 用户目录（含置顶顺序）是按账号存的，换账号必须清掉，
+  // 否则会看到上一个账号的置顶顺序。放在这里是为了让所有登出路径都不遗漏。
+  clearOwners()
 }
 
 /** 上传相关配置的本地缓存（体积上限、允许类型、分片大小）。 */
