@@ -33,10 +33,65 @@ export function formatDaysLeft(days: number): string {
   return '已到期'
 }
 
-/** 取扩展名的展示形式。 */
+/**
+ * 文件类型的中文名，用在类型角标上。
+ * 用中文名（Word / Excel / 图片）而不是裸扩展名，界面上一眼能看懂，
+ * 也就不需要在表格上方再写一行说明文字。
+ */
+const EXT_LABELS: Record<string, string> = {
+  '.doc': 'Word',
+  '.docx': 'Word',
+  '.xls': 'Excel',
+  '.xlsx': 'Excel',
+  '.csv': 'Excel',
+  '.ppt': 'PPT',
+  '.pptx': 'PPT',
+  '.pdf': 'PDF',
+  '.txt': '文本',
+  '.md': '文本',
+  '.log': '文本',
+  '.json': '文本',
+  '.xml': '文本',
+  '.yml': '文本',
+  '.yaml': '文本',
+  '.ini': '文本',
+  '.png': '图片',
+  '.jpg': '图片',
+  '.jpeg': '图片',
+  '.gif': '图片',
+  '.webp': '图片',
+  '.bmp': '图片',
+  '.ico': '图片',
+  '.tiff': '图片',
+  '.mp4': '视频',
+  '.webm': '视频',
+  '.mov': '视频',
+  '.ogg': '音视频',
+  '.mp3': '音频',
+  '.wav': '音频',
+  '.m4a': '音频',
+  '.flac': '音频',
+  '.aac': '音频',
+  '.zip': '压缩包',
+  '.rar': '压缩包',
+  '.7z': '压缩包',
+  '.tar': '压缩包',
+  '.gz': '压缩包'
+}
+
+/** 旧版 Office 二进制格式：浏览器无法在线预览，只能下载。 */
+const LEGACY_OFFICE = ['.doc', '.xls', '.ppt']
+
+/** 取扩展名的展示形式（已知类型给中文名，未知类型回退到大写扩展名）。 */
 export function extLabel(ext: string): string {
-  if (!ext) return '无后缀'
-  return ext.replace(/^\./, '').toUpperCase()
+  const e = (ext || '').toLowerCase()
+  if (!e) return '文件'
+  return EXT_LABELS[e] || e.replace(/^\./, '').toUpperCase().slice(0, 6)
+}
+
+/** 该文件能否在线预览（旧版 Office 格式只能下载后查看）。 */
+export function canPreview(ext: string): boolean {
+  return !LEGACY_OFFICE.includes((ext || '').toLowerCase())
 }
 
 /** 截断过长文件名用于展示（保留扩展名）。 */

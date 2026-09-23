@@ -156,6 +156,14 @@ jobs:
         working-directory: web
         run: npm run test:entrypoint
 
+      # 响应式布局只能在真实浏览器里验证：缺 border-box、grid 子项被内容撑宽
+      # 这类问题在单测与类型检查里都发现不了（曾因此让登录卡在窄屏溢出）。
+      - name: 安装 Playwright 浏览器
+        working-directory: web
+        run: |
+          npm i -g playwright@1.49.0 --no-fund --no-audit
+          npx playwright install --with-deps chromium
+
       - name: 生产构建
         working-directory: web
         env:
@@ -165,6 +173,13 @@ jobs:
           # 公开镜像里烘进真实域名会泄露内网地址，故此处只用 localhost 占位。
           HOST: "https://localhost"
         run: npm run build
+
+      # 响应式检查必须有可用后端：内页受路由守卫保护，接口不通会被重定向到登录页，
+      # 那样只测到登录页却显示"通过"（这个假通过已经踩过）。
+      # 脚本自带 mock 后端与 dev server，并在内部强制校验 /api/health 可达。
+      - name: 响应式布局检查（多视口无横向溢出）
+        working-directory: web
+        run: npm run test:responsive
 
       - name: 校验构建产物
         working-directory: web

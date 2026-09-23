@@ -1,9 +1,12 @@
 <script setup lang="ts">
-// 网络不可用提示页：前端在公网、接口在内网时的主要兜底界面。
+// 网络不可用页：前端在公网、接口在内网时的主要兜底界面。
 //
-// 触发场景：员工在外网/家里打开前端，请求内网 API 超时或被浏览器 CORS 拦截。
+// 触发场景：员工在外网打开页面，请求内网 API 超时或被浏览器 CORS 拦截。
 // 文案按需求固定为「无法在此网络下使用，请更换网络再试！」。
-import { NButton, NCard, NIcon, NSpace, NText } from 'naive-ui'
+//
+// 这里保留说明文字是刻意的：用户看到页面却用不了，必须知道「为什么」和「怎么办」。
+// 这属于异常态提示，不是「功能靠小字解释」。
+import { NButton, NIcon } from 'naive-ui'
 import { CloudOfflineOutline, RefreshOutline } from '@vicons/ionicons5'
 import { apiEndpointInfo, NETWORK_UNAVAILABLE_MESSAGE } from '@/api'
 
@@ -15,60 +18,82 @@ const info = apiEndpointInfo()
 
 <template>
   <div class="net-page">
-    <n-card class="net-card" :bordered="false">
-      <n-space vertical align="center" :size="12">
-        <n-icon size="52" color="#f0a020"><cloud-offline-outline /></n-icon>
-        <n-text strong style="font-size: 19px">{{ NETWORK_UNAVAILABLE_MESSAGE }}</n-text>
+    <div class="net-card">
+      <div class="net-icon" aria-hidden="true">
+        <n-icon :size="34"><cloud-offline-outline /></n-icon>
+      </div>
+      <h1 class="net-title">{{ NETWORK_UNAVAILABLE_MESSAGE }}</h1>
+      <p class="net-text">文件服务部署在公司内网，请连接公司网络或 VPN 后重试。</p>
 
-        <n-text depth="3" style="font-size: 13px; text-align: center; line-height: 1.7">
-          本系统的文件服务部署在公司内网，需要连接公司网络（或公司 VPN）才能使用。<br />
-          请切换到公司网络后重试。
-        </n-text>
+      <n-button type="primary" size="large" @click="emit('retry')">
+        <template #icon>
+          <n-icon><refresh-outline /></n-icon>
+        </template>
+        重新检测
+      </n-button>
 
-        <n-space vertical :size="4" style="width: 100%; margin-top: 4px">
-          <n-text depth="3" style="font-size: 12px">
-            接口地址：<code>{{ info.base_url }}</code>
-          </n-text>
-          <n-text v-if="props.detail" depth="3" style="font-size: 12px; word-break: break-all">
-            错误详情：{{ props.detail }}
-          </n-text>
-        </n-space>
-
-        <n-button type="primary" size="large" style="margin-top: 6px" @click="emit('retry')">
-          <template #icon>
-            <n-icon><refresh-outline /></n-icon>
-          </template>
-          重新检测
-        </n-button>
-
-        <n-text depth="3" style="font-size: 12px">
-          已连接公司网络仍无法使用？请联系管理员检查内网服务与跨域白名单配置。
-        </n-text>
-      </n-space>
-    </n-card>
+      <div class="net-detail">
+        <div>{{ info.base_url }}</div>
+        <div v-if="props.detail">{{ props.detail }}</div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .net-page {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  box-sizing: border-box;
-  background: linear-gradient(135deg, #fff8ec 0%, #f7f9fc 60%, #eef4ff 100%);
+  display: grid;
+  min-height: 100dvh;
+  padding: 24px;
+  place-items: center;
+  background: var(--page-glow), var(--color-bg);
 }
+
 .net-card {
-  width: 460px;
-  max-width: 100%;
-  box-shadow: 0 10px 40px rgba(240, 160, 32, 0.14);
-  border-radius: 12px;
+  display: grid;
+  width: 100%;
+  max-width: 420px;
+  padding: 34px 28px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 18px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-float);
+  justify-items: center;
+  text-align: center;
 }
-code {
-  background: #f2f3f5;
-  padding: 1px 5px;
-  border-radius: 4px;
+
+.net-icon {
+  display: grid;
+  width: 62px;
+  height: 62px;
+  margin-bottom: 16px;
+  place-items: center;
+  border-radius: 18px;
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+
+.net-title {
+  margin: 0 0 10px;
+  color: var(--color-text-strong);
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.net-text {
+  margin: 0 0 22px;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.net-detail {
+  margin-top: 20px;
+  color: var(--color-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+  line-height: 1.8;
+  word-break: break-all;
 }
 </style>

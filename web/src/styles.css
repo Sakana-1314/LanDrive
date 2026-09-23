@@ -1,0 +1,161 @@
+/* 局域网文件助手 —— 设计令牌与全局基础样式
+ *
+ * 为什么集中在这里：此前颜色、字号、圆角散落在各组件的内联 style 里
+ * （同一处灰有好几种写法），改一次要翻遍所有文件。统一成变量后，
+ * 明暗两套外观只需覆盖颜色类令牌，尺寸与结构共用一套。
+ *
+ * 命名与同组织的 Electrical-Manager 保持一致，便于横向维护。 */
+
+:root {
+  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  color: var(--color-text-strong);
+  background: var(--color-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+
+  --color-primary: #3f63d8;
+  --color-primary-hover: #5376e4;
+  --color-primary-soft: #edf2ff;
+  --color-primary-soft-hover: #e6edff;
+  --color-primary-border: #dce5ff;
+  --color-primary-strong-text: #3658c7;
+  --color-success: #229b6b;
+  --color-warning: #d99020;
+  --color-danger: #d94b64;
+
+  --color-text-strong: #172033;
+  --color-text: #4b5565;
+  --color-text-muted: #7d8798;
+
+  --color-bg: #f4f6fa;
+  --color-surface: #ffffff;
+  --color-surface-soft: #f8faff;
+  --color-surface-translucent: rgb(255 255 255 / 92%);
+  --color-border: #e2e7ef;
+  --color-border-subtle: #edf0f5;
+
+  --color-table-header: #f7f9fc;
+  --color-table-row-hover: #f4f7ff;
+  --color-panel: #f6f8fb;
+
+  --radius-control: 9px;
+  --radius-card: 14px;
+  --radius-pill: 999px;
+  --shadow-card: 0 8px 24px rgb(15 23 42 / 5%);
+  --shadow-card-hover: 0 12px 30px rgb(15 23 42 / 8%);
+  --shadow-float: 0 18px 44px rgb(15 23 42 / 10%);
+
+  /* 页面背景主色光晕（登录页、内容区顶部） */
+  --page-glow: radial-gradient(circle at 100% 0%, rgb(63 99 216 / 7%), transparent 32%);
+  --gradient-brand: linear-gradient(145deg, #2947a6, #5579e7);
+
+  /* 顶栏与侧栏高度：移动端在媒体查询里收窄，组件统一引用变量 */
+  --header-height: 64px;
+  --sider-width: 208px;
+  --sider-collapsed-width: 64px;
+  --content-padding: 24px 28px 32px;
+
+  /* 移动端断点（与 useMediaQuery 的 768px 保持一致，改这里也要改 layouts/useIsMobile.ts） */
+  --breakpoint-mobile: 768px;
+}
+
+/* 深色外观：由 stores/theme.ts 解析后写在 <html data-theme="dark"> 上。
+ * 只覆盖颜色 / 阴影类令牌，尺寸与圆角保持共用。 */
+[data-theme='dark'] {
+  color: #e6eaf2;
+  background: #13171d;
+
+  --color-primary: #6b8cf0;
+  --color-primary-hover: #86a2f5;
+  --color-primary-soft: #232f4a;
+  --color-primary-soft-hover: #2a3757;
+  --color-primary-border: #33456f;
+  --color-primary-strong-text: #9fb5ff;
+  --color-success: #3fbf8a;
+  --color-warning: #e0a83f;
+  --color-danger: #f27289;
+
+  --color-text-strong: #e6eaf2;
+  --color-text: #aeb8c9;
+  --color-text-muted: #8791a3;
+
+  --color-bg: #13171d;
+  --color-surface: #191e26;
+  --color-surface-soft: #1c222b;
+  --color-surface-translucent: rgb(25 30 38 / 92%);
+  --color-border: #333b47;
+  --color-border-subtle: #2a313b;
+
+  --color-table-header: #1e242d;
+  --color-table-row-hover: #212936;
+  --color-panel: #1e242d;
+
+  --shadow-card: 0 8px 24px rgb(0 0 0 / 32%);
+  --shadow-card-hover: 0 12px 30px rgb(0 0 0 / 42%);
+  --shadow-float: 0 18px 44px rgb(0 0 0 / 46%);
+
+  --page-glow: radial-gradient(circle at 100% 0%, rgb(107 140 240 / 10%), transparent 34%);
+}
+
+/* 全局 border-box：自定义元素带 padding 时不会撑破父容器。
+ * 缺少它时「width:100% + padding」会溢出（登录卡在 320px 屏上曾溢出 5px）。 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ============ 复用类：减少各页面重复的内联 style ============ */
+
+/** 页面区块标题：图标 + 标题 + 可选右侧操作。替代原先「标题 + 一行小字说明」。 */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.section-head__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--color-text-strong);
+  font-size: 16px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+/** 卡片：统一圆角、阴影与悬停层次。 */
+.card-surface {
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+/** 次级信息（工号、时间等）：字号仍清晰，不用 11px 这种贴地字号。 */
+.text-muted {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
