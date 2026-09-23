@@ -9,7 +9,6 @@ import axios, { type AxiosInstance, type AxiosProgressEvent } from 'axios'
 import type {
   FileItem,
   FileQuery,
-  LogEntry,
   OrphanReport,
   OwnerAggregate,
   Paged,
@@ -227,6 +226,16 @@ export async function listOwners(): Promise<{ items: OwnerAggregate[]; total: nu
   return data
 }
 
+/** 置顶某人的人员目录（对当前账号生效）。 */
+export async function pinOwner(id: number): Promise<void> {
+  await http.put(`/files/owners/${id}/pin`)
+}
+
+/** 取消置顶。 */
+export async function unpinOwner(id: number): Promise<void> {
+  await http.delete(`/files/owners/${id}/pin`)
+}
+
 export async function getFile(id: number): Promise<FileItem> {
   const { data } = await http.get<FileItem>(`/files/${id}`)
   return data
@@ -393,17 +402,6 @@ export async function adminRestoreFile(id: number): Promise<FileItem> {
 
 export async function adminPurgeFile(id: number): Promise<void> {
   await http.delete(`/admin/files/${id}`)
-}
-
-export async function adminListLogs(q: {
-  action?: string
-  q?: string
-  days?: number
-  page?: number
-  page_size?: number
-}): Promise<Paged<LogEntry>> {
-  const { data } = await http.get<Paged<LogEntry>>('/admin/logs', { params: q })
-  return data
 }
 
 export async function adminStats(): Promise<Stats> {

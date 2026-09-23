@@ -49,7 +49,7 @@ func testStore(t *testing.T) *Store {
 	t.Cleanup(func() { _ = st.Close() })
 
 	// 清空业务表，保证测试可重复运行。
-	for _, table := range []string{"op_logs", "upload_chunks", "upload_sessions", "files", "users", "settings"} {
+	for _, table := range []string{"user_pins", "upload_chunks", "upload_sessions", "files", "users", "settings"} {
 		if _, err := st.db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("清理表 %s 失败: %v", table, err)
 		}
@@ -63,7 +63,7 @@ func TestMigrateCreatesAllTables(t *testing.T) {
 
 	want := map[string]bool{
 		"users": false, "files": false, "upload_sessions": false,
-		"upload_chunks": false, "settings": false, "op_logs": false,
+		"upload_chunks": false, "settings": false, "user_pins": false,
 		"schema_migrations": false,
 	}
 	rows, err := st.db.QueryContext(ctx, "SHOW TABLES")
@@ -527,78 +527,6 @@ func TestUploadRepositoryAndChunks(t *testing.T) {
 	}
 }
 
-func TestLogRepositoryAndStats(t *testing.T) {
-	st := testStore(t)
-	ctx := context.Background()
-	uid := int64(1)
-
-	for i := 0; i < 5; i++ {
-		e := &model.LogEntry{
-			UserID: &uid, EmployeeNo: "40001", Action: model.ActUpload,
-			TargetType: "file", TargetID: itoaTest(int64(i)), Detail: "上传文件",
-			IP: "192.168.1.10",
-		}
-		if err := st.InsertLog(ctx, e); err != nil {
-			t.Fatalf("InsertLog: %v", err)
-		}
-	}
-	if err := st.InsertLog(ctx, &model.LogEntry{
-		EmployeeNo: "40002", Action: model.ActLogin, Detail: "登录成功",
-	}); err != nil {
-		t.Fatalf("InsertLog: %v", err)
-	}
-
-	list, total, err := st.ListLogs(ctx, LogQuery{Page: 1, PageSize: 10})
-	if err != nil || total != 6 {
-		t.Fatalf("ListLogs total = %d, err=%v", total, err)
-	}
-	if list[0].ID < list[len(list)-1].ID {
-		t.Fatalf("日志应按时间倒序返回")
-	}
-	if _, total, _ := st.ListLogs(ctx, LogQuery{Action: model.ActLogin, Page: 1, PageSize: 10}); total != 1 {
-		t.Fatalf("按动作筛选应命中 1 条")
-	}
-	if _, total, _ := st.ListLogs(ctx, LogQuery{UserID: uid, Page: 1, PageSize: 10}); total != 5 {
-		t.Fatalf("按用户筛选应命中 5 条")
-	}
-	if _, total, _ := st.ListLogs(ctx, LogQuery{Keyword: "40002", Page: 1, PageSize: 10}); total != 1 {
-		t.Fatalf("按关键字筛选应命中 1 条")
-	}
-	from := time.Now().UTC().Add(-time.Hour)
-	if _, total, _ := st.ListLogs(ctx, LogQuery{From: &from, Page: 1, PageSize: 10}); total != 6 {
-		t.Fatalf("时间过滤应命中全部")
-	}
-	future := time.Now().UTC().Add(time.Hour)
-	if _, total, _ := st.ListLogs(ctx, LogQuery{From: &future, Page: 1, PageSize: 10}); total != 0 {
-		t.Fatalf("未来时间过滤应命中 0 条")
-	}
-
-	actions, err := st.DistinctActions(ctx)
-	if err != nil || len(actions) != 2 {
-		t.Fatalf("DistinctActions = %v, err=%v", actions, err)
-	}
-	if recent, err := st.ListRecentLogs(ctx, 3); err != nil || len(recent) != 3 {
-		t.Fatalf("ListRecentLogs = %d, err=%v", len(recent), err)
-	}
-
-	// 裁剪：删除 1 小时前的日志
-	if n, err := st.PurgeLogs(ctx, time.Now().UTC().Add(time.Hour)); err != nil || n != 6 {
-		t.Fatalf("PurgeLogs = %d, err=%v", n, err)
-	}
-	if _, total, _ := st.ListLogs(ctx, LogQuery{Page: 1, PageSize: 10}); total != 0 {
-		t.Fatalf("裁剪后应为空")
-	}
-
-	// 统计
-	stats, err := st.Stats(ctx, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("Stats: %v", err)
-	}
-	if stats.Users != 0 || stats.Files != 0 {
-		t.Fatalf("空库统计应为 0: %+v", stats)
-	}
-}
-
 func TestNamedLock(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
@@ -683,6 +611,165 @@ func TestForeignKeysProtectIntegrity(t *testing.T) {
 	}
 	if _, err := st.GetUploadSession(ctx, sess.ID); err != ErrNotFound {
 		t.Fatalf("会话应随账号删除")
+	}
+}
+
+// TestOwnerPins 验证用户置顶：按账号独立、排序由服务端决定、可重复调用。
+func TestOwnerPins(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	viewer := createTestUser(t, st, "20001", "查看者")
+	alice := createTestUser(t, st, "20002", "张伟")
+	bob := createTestUser(t, st, "20003", "李静")
+
+	// 未置顶时按 id 升序。
+	owners, err := st.ListOwners(ctx, viewer.ID)
+	if err != nil {
+		t.Fatalf("ListOwners: %v", err)
+	}
+	if len(owners) != 3 || owners[0].UserID != viewer.ID {
+		t.Fatalf("未置顶应按 id 升序: %+v", owners)
+	}
+	if owners[0].Pinned {
+		t.Fatalf("未置顶时 pinned 应为 false")
+	}
+
+	// 置顶 bob 后应排到最前，且 pinned=true。
+	if err := st.PinOwner(ctx, viewer.ID, bob.ID); err != nil {
+		t.Fatalf("PinOwner: %v", err)
+	}
+	owners, err = st.ListOwners(ctx, viewer.ID)
+	if err != nil {
+		t.Fatalf("ListOwners: %v", err)
+	}
+	if owners[0].UserID != bob.ID || !owners[0].Pinned {
+		t.Fatalf("置顶项应排最前且 pinned=true: %+v", owners[0])
+	}
+
+	// 幂等：重复置顶不应报错，也不应产生重复行。
+	if err := st.PinOwner(ctx, viewer.ID, bob.ID); err != nil {
+		t.Fatalf("重复置顶应幂等: %v", err)
+	}
+	var pinRows int
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM user_pins WHERE owner_user_id = ? AND target_user_id = ?`,
+		viewer.ID, bob.ID).Scan(&pinRows); err != nil {
+		t.Fatalf("统计置顶行: %v", err)
+	}
+	if pinRows != 1 {
+		t.Fatalf("重复置顶应只有一行，实际 %d", pinRows)
+	}
+
+	// 置顶是"每人各一份"：换个人看不应受 viewer 的置顶影响。
+	others, err := st.ListOwners(ctx, alice.ID)
+	if err != nil {
+		t.Fatalf("ListOwners(alice): %v", err)
+	}
+	for _, o := range others {
+		if o.Pinned {
+			t.Fatalf("别人的置顶不应影响我的视图: %+v", o)
+		}
+	}
+
+	// 取消置顶后恢复 id 升序；重复取消同样幂等。
+	if err := st.UnpinOwner(ctx, viewer.ID, bob.ID); err != nil {
+		t.Fatalf("UnpinOwner: %v", err)
+	}
+	if err := st.UnpinOwner(ctx, viewer.ID, bob.ID); err != nil {
+		t.Fatalf("重复取消应幂等: %v", err)
+	}
+	owners, err = st.ListOwners(ctx, viewer.ID)
+	if err != nil {
+		t.Fatalf("ListOwners: %v", err)
+	}
+	if owners[0].UserID != viewer.ID || owners[0].Pinned {
+		t.Fatalf("取消置顶后应回到 id 升序: %+v", owners[0])
+	}
+
+	// 删除被置顶用户时，外键 CASCADE 应清掉引用它的置顶行，
+	// 否则菜单里会留下指向不存在账号的幽灵项。
+	if err := st.PinOwner(ctx, viewer.ID, bob.ID); err != nil {
+		t.Fatalf("PinOwner: %v", err)
+	}
+	if err := st.DeleteUser(ctx, bob.ID); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_pins`).Scan(&pinRows); err != nil {
+		t.Fatalf("统计置顶行: %v", err)
+	}
+	if pinRows != 0 {
+		t.Fatalf("删除用户后应级联清理置顶行，仍剩 %d 行", pinRows)
+	}
+}
+
+// TestOwnerUsageAggregates 覆盖「我的文件数 / 占用」聚合。
+//
+// 为什么单独立一个测试：users 表里没有这两列，/auth/me 若直接外发查询结果会
+// 恒为 0，顶栏就永远显示「0 个文件 · 0 B」（曾经的真实缺陷）。
+//
+// 同时守住一个容易踩的口径问题：必须只算 active。CountFilesByOwner 是给
+// "删账号前提示还有几个文件"用的，不过滤 status；误用它做展示会把回收站
+// 里的文件也算进去，与「我的文件」列表数量对不上。
+func TestOwnerUsageAggregates(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	owner := createTestUser(t, st, "30001", "有文件的人")
+
+	dir := "users/" + itoaTest(owner.ID)
+	sizes := []int64{1024, 2048, 4096}
+	for i, size := range sizes {
+		f := &model.File{
+			OwnerID: owner.ID, OriginalNam: "f" + itoaTest(int64(i)) + ".bin",
+			Ext: ".bin", SizeBytes: size, Mime: "application/octet-stream",
+			SHA256:  strings.Repeat("a", 64),
+			RelPath: dir + "/" + itoaTest(int64(i+1)) + ".bin",
+			Status:  model.StatusActive, ExpiresAt: time.Now().UTC().AddDate(0, 0, 15),
+		}
+		if err := st.CreateFile(ctx, f); err != nil {
+			t.Fatalf("CreateFile: %v", err)
+		}
+	}
+
+	var wantBytes int64
+	for _, s := range sizes {
+		wantBytes += s
+	}
+
+	gotCount, gotBytes, err := st.ActiveUsageByOwner(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("ActiveUsageByOwner: %v", err)
+	}
+	if gotCount != int64(len(sizes)) {
+		t.Fatalf("active 文件数 = %d，应为 %d", gotCount, len(sizes))
+	}
+	if gotBytes != wantBytes {
+		t.Fatalf("active 占用 = %d，应为 %d", gotBytes, wantBytes)
+	}
+
+	// 回收站里的文件不应计入占用与计数 —— 与用户管理页口径保持一致。
+	list, err := st.ListFilesByOwner(ctx, owner.ID)
+	if err != nil || len(list) != len(sizes) {
+		t.Fatalf("ListFilesByOwner 数量不符: %d, err=%v", len(list), err)
+	}
+	trashed := list[len(list)-1]
+	if err := st.MarkTrashed(ctx, trashed.ID, time.Now().UTC(), time.Now().UTC().AddDate(0, 0, 7)); err != nil {
+		t.Fatalf("MarkTrashed: %v", err)
+	}
+	gotCount, gotBytes, err = st.ActiveUsageByOwner(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("ActiveUsageByOwner: %v", err)
+	}
+	if gotCount != int64(len(sizes)-1) {
+		t.Fatalf("回收站文件不应计入文件数：active 文件数 = %d，应为 %d", gotCount, len(sizes)-1)
+	}
+	if gotBytes != wantBytes-trashed.SizeBytes {
+		t.Fatalf("回收站文件不应计入占用：active 占用 = %d，应为 %d",
+			gotBytes, wantBytes-trashed.SizeBytes)
+	}
+	// 而删除账号前的提示要算上回收站，两者口径必须不同。
+	if n, err := st.CountFilesByOwner(ctx, owner.ID); err != nil || n != int64(len(sizes)) {
+		t.Fatalf("CountFilesByOwner 应含回收站文件 = %d, err=%v（应为 %d）", n, err, len(sizes))
 	}
 }
 

@@ -46,12 +46,12 @@ const PAGES = [
   '/login',
   '/files',
   '/files/mine',
-  '/upload',
+  // 子 tab 形态（菜单里选中某个用户的目录）
+  '/files?owner=2',
   '/profile',
-  '/admin/dashboard',
+  '/admin/workbench',
   '/admin/users',
   '/admin/files',
-  '/admin/logs',
   '/admin/settings'
 ]
 const VIEWPORTS = [

@@ -141,7 +141,7 @@ onMounted(refresh)
 }
 
 .table-wrap {
-  margin-top: 16px;
+  margin-top: var(--space-md);
 }
 
 @media (max-width: 768px) {

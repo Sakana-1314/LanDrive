@@ -1,25 +1,39 @@
 <script setup lang="ts">
-// 全部文件 / 我的文件：左边人员筛选，右边文件列表。
+// 全部文件 / 我的文件。
 //
-// 「全部文件」可以浏览并下载所有人的文件；「我的文件」只列自己的，
-// 且只有自己能改名或删除（权限由后端的 can_edit 决定）。
+// 导航方式的变化：人员筛选不再由本页提供 —— 左侧菜单的「全部文件」展开后
+// 就是按人的子 tab（还能置顶）。因此这里只按 URL 的 ?owner= 取数，
+// 同一份导航在桌面与移动端都成立，不必维护两套筛选 UI。
 //
-// 移动端不显示左侧人员栏（窄屏放不下），改为下拉筛选。
+// 「我的文件」上方嵌入上传面板：上传的目标就是自己的目录，
+// 拖进来即可，不再需要单独的「上传文件」页面。
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { NCard, NIcon, NSelect, NTag, useMessage } from 'naive-ui'
-import { FolderOutline } from '@vicons/ionicons5'
-import { errMsg, listFiles, listOwners } from '@/api'
-import type { FileItem, OwnerAggregate } from '@/api/types'
+import { NCard, useMessage } from 'naive-ui'
+import { errMsg, listFiles } from '@/api'
+import type { FileItem } from '@/api/types'
 import FileTable from '@/components/FileTable.vue'
-import { formatBytes } from '@/utils/format'
-import { useIsMobile } from '@/utils/themeState'
+import UploadPanel from '@/components/UploadPanel.vue'
+import { loadOwners, ownersState } from '@/stores/owners'
 
 const route = useRoute()
 const message = useMessage()
-const isMobile = useIsMobile()
 
 const scope = computed<'all' | 'mine'>(() => (route.meta.scope === 'mine' ? 'mine' : 'all'))
+
+/** 当前查看的人员目录；来自菜单子 tab 的 ?owner=<id>。 */
+const ownerId = computed(() => {
+  const v = Number(route.query.owner)
+  return Number.isFinite(v) && v > 0 ? v : null
+})
+
+/** 列表标题：选中某人时显示其姓名，否则显示全部。 */
+const ownerLabel = computed(() => {
+  if (scope.value === 'mine') return '我的文件'
+  if (ownerId.value === null) return '全部人员'
+  const hit = ownersState.items.find((o) => o.user_id === ownerId.value)
+  return hit ? hit.name : '全部人员'
+})
 
 const items = ref<FileItem[]>([])
 const total = ref(0)
@@ -29,50 +43,13 @@ const keyword = ref('')
 const sort = ref('created_at')
 const order = ref<'asc' | 'desc'>('desc')
 const loading = ref(false)
-const owners = ref<OwnerAggregate[]>([])
-
-/** 当前选中的人员：null = 全部。 */
-const selectedOwner = ref<number | null>(null)
-
-const totalFiles = computed(() => owners.value.reduce((s, o) => s + o.file_count, 0))
-
-/** 人员下拉（移动端）与侧栏（桌面端）共用同一份选项。 */
-const ownerOptions = computed(() => [
-  { label: `全部人员（${totalFiles.value}）`, value: 0 },
-  ...owners.value.map((o) => ({
-    label: `${o.name} · ${o.file_count} 个 · ${formatBytes(o.used_bytes)}`,
-    value: o.user_id
-  }))
-])
-
-const selectedOwnerKey = computed({
-  get: () => selectedOwner.value ?? 0,
-  set: (v: number) => {
-    selectedOwner.value = v === 0 ? null : v
-    onOwnerChange()
-  }
-})
-
-function onOwnerChange() {
-  page.value = 1
-  load()
-}
-
-async function loadOwners() {
-  try {
-    const res = await listOwners()
-    owners.value = res.items
-  } catch (e) {
-    message.error(errMsg(e))
-  }
-}
 
 async function load() {
   loading.value = true
   try {
     const res = await listFiles({
       scope: scope.value,
-      owner_id: scope.value === 'mine' ? undefined : selectedOwner.value || undefined,
+      owner_id: scope.value === 'mine' ? undefined : ownerId.value || undefined,
       q: keyword.value.trim() || undefined,
       page: page.value,
       page_size: pageSize.value,
@@ -90,7 +67,8 @@ async function load() {
 
 function refresh() {
   load()
-  if (scope.value === 'all') loadOwners()
+  // 文件数会影响菜单里的角标，一并刷新（失败静默，不影响列表）
+  if (scope.value === 'all') loadOwners(true).catch(() => {})
 }
 
 function onSortChange(p: { sort: string; order: 'asc' | 'desc' }) {
@@ -99,11 +77,11 @@ function onSortChange(p: { sort: string; order: 'asc' | 'desc' }) {
   load()
 }
 
+// 切换菜单子 tab（?owner= 变化）或切到「我的文件」时，重置分页与关键字。
 watch(
   () => route.fullPath,
   () => {
     keyword.value = ''
-    selectedOwner.value = null
     page.value = 1
     refresh()
   }
@@ -118,72 +96,17 @@ onMounted(() => {
 
 <template>
   <div class="files-page">
-    <!-- 桌面端：左侧人员列表。移动端改由下方下拉选择（窄屏放不下侧栏）。 -->
-    <aside v-if="scope === 'all' && !isMobile" class="owner-panel">
-      <div class="owner-panel__head">
-        <n-icon color="var(--color-primary)" :size="18"><folder-outline /></n-icon>
-        <span>人员目录</span>
-      </div>
-      <ul class="owner-list">
-        <li>
-          <button
-            type="button"
-            class="owner-item"
-            :class="{ active: selectedOwner === null }"
-            @click="
-              () => {
-                selectedOwner = null
-                onOwnerChange()
-              }
-            "
-          >
-            <span class="owner-item__name">全部人员</span>
-            <span class="owner-item__meta">{{ totalFiles }} 个文件</span>
-          </button>
-        </li>
-        <li v-for="o in owners" :key="o.user_id">
-          <button
-            type="button"
-            class="owner-item"
-            :class="{ active: selectedOwner === o.user_id }"
-            @click="
-              () => {
-                selectedOwner = o.user_id
-                onOwnerChange()
-              }
-            "
-          >
-            <span class="owner-item__name">{{ o.name }}</span>
-            <span class="owner-item__meta">{{ o.file_count }} 个 · {{ formatBytes(o.used_bytes) }}</span>
-          </button>
-        </li>
-        <li v-if="!owners.length" class="owner-empty">还没有人上传文件</li>
-      </ul>
-    </aside>
-
-    <n-card class="files-card" :bordered="false">
-      <div class="section-head">
-        <div class="section-head__title">
-          <n-tag size="small" :bordered="false" :type="scope === 'mine' ? 'info' : 'default'">
-            {{ scope === 'mine' ? '仅我可修改' : '均可下载' }}
-          </n-tag>
-        </div>
-      </div>
-
-      <!-- 移动端：人员筛选收成一行下拉 -->
-      <n-select
-        v-if="scope === 'all' && isMobile && owners.length"
-        v-model:value="selectedOwnerKey"
-        class="owner-select"
-        :options="ownerOptions"
-        size="medium"
-      />
+    <n-card class="card-surface files-card" :bordered="false">
+      <!-- 上传面板只出现在「我的文件」：它上传到的就是自己的目录 -->
+      <UploadPanel v-if="scope === 'mine'" class="files-card__upload" @uploaded="refresh" />
 
       <FileTable
         v-model:keyword="keyword"
+        :title="scope === 'all' ? ownerLabel : ''"
         :items="items"
         :loading="loading"
         :total="total"
+        :show-owner="scope === 'all'"
         :page="page"
         :page-size="pageSize"
         @update:page="(v: number) => (page = v)"
@@ -197,92 +120,17 @@ onMounted(() => {
 
 <style scoped>
 .files-page {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-
-.owner-panel {
-  flex: none;
-  width: 240px;
-  max-height: calc(100vh - var(--header-height) - 60px);
-  overflow-y: auto;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-card);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-card);
-}
-
-.owner-panel__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 14px 14px 10px;
-  color: var(--color-text-strong);
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.owner-list {
-  margin: 0;
-  padding: 0 8px 10px;
-  list-style: none;
-}
-
-.owner-item {
   display: grid;
-  gap: 2px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: var(--radius-control);
-  color: inherit;
-  text-align: left;
-  background: transparent;
-  cursor: pointer;
-}
-
-.owner-item:hover {
-  background: var(--color-primary-soft);
-}
-
-.owner-item.active {
-  background: var(--color-primary-soft);
-  box-shadow: inset 2px 0 0 var(--color-primary);
-}
-
-.owner-item__name {
-  overflow: hidden;
-  color: var(--color-text-strong);
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.owner-item__meta {
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
-
-.owner-empty {
-  padding: 10px;
-  color: var(--color-text-muted);
-  font-size: 13px;
-}
-
-.files-card {
-  flex: 1;
+  /* minmax(0,1fr)：grid 子项默认 min-width:auto，长文件名会把列撑宽 */
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
 }
 
-.owner-select {
-  margin-top: 12px;
+.files-card {
+  min-width: 0;
 }
 
-/* 移动端：内容区占满宽度 */
-@media (max-width: 768px) {
-  .files-page {
-    display: block;
-  }
+.files-card__upload {
+  margin-bottom: var(--space-lg);
 }
 </style>

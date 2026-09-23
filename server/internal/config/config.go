@@ -21,7 +21,6 @@ type Config struct {
 	AdminName     string   // LANDRIVE_ADMIN_NAME 默认 系统管理员
 	TrustProxy    bool     // LANDRIVE_TRUST_PROXY 默认 false
 	CORSAllow     []string // LANDRIVE_CORS_ALLOW 逗号分隔
-	LogKeepDays   int      // LANDRIVE_LOG_KEEP_DAYS 默认 90
 }
 
 // Load 读取环境变量并校验。
@@ -37,7 +36,6 @@ func Load() (*Config, error) {
 		AdminName:     envStr("LANDRIVE_ADMIN_NAME", "系统管理员"),
 		TrustProxy:    envBool("LANDRIVE_TRUST_PROXY", false),
 		CORSAllow:     envList("LANDRIVE_CORS_ALLOW", nil),
-		LogKeepDays:   envInt("LANDRIVE_LOG_KEEP_DAYS", 90),
 	}
 
 	var errs []string
@@ -54,9 +52,6 @@ func Load() (*Config, error) {
 	}
 	if strings.TrimSpace(c.AdminEmpNo) == "" {
 		errs = append(errs, "LANDRIVE_ADMIN_EMPLOYEE_NO 不能为空")
-	}
-	if c.LogKeepDays < 1 {
-		c.LogKeepDays = 90
 	}
 	if len(errs) > 0 {
 		return nil, errors.New(strings.Join(errs, "；"))
@@ -81,18 +76,6 @@ func envBool(key string, def bool) bool {
 		return def
 	}
 	return b
-}
-
-func envInt(key string, def int) int {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return def
-	}
-	return n
 }
 
 func envList(key string, def []string) []string {

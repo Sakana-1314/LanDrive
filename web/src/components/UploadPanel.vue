@@ -1,16 +1,16 @@
 <script setup lang="ts">
-// 上传页：拖拽/选择文件 → 分片并发上传 → 断点续传 → 进度与结果。
+// 上传面板：内嵌在「我的文件」里，不再单独成页。
 //
-// 文案取舍：不再罗列「支持分片 / 刷新可续传 / 24 小时」这类说明 ——
-// 上传策略（体积上限、允许类型、分片大小）由顶部标签直接给出，
-// 续传由状态标签（续传中）体现，界面本身说明功能。
+// 为什么做成组件而不是页面：上传的目标目录就是"我的文件"，单独一个 tab
+// 意味着选中目录后还要再切一次页面。现在拖到文件列表上方即可。
+//
+// 文案取舍：不显示「最大 500 MB / 不限类型」这类策略角标 —— 超限时校验会
+// 直接报错，平时不需要占位。仅"上传已暂停"属于异常态，必须说清。
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NAlert,
   NButton,
-  NCard,
-  NEmpty,
   NIcon,
   NProgress,
   NTag,
@@ -19,15 +19,13 @@ import {
   useMessage,
   type UploadFileInfo
 } from 'naive-ui'
-import {
-  CheckmarkCircleOutline,
-  CloudUploadOutline,
-  TrashOutline
-} from '@vicons/ionicons5'
+import { CheckmarkCircleOutline, CloudUploadOutline, TrashOutline } from '@vicons/ionicons5'
 import { errMsg, uploadConfig } from '@/api'
 import { applyUploadConfig, state as userState, uploadState, validateFile } from '@/stores/user'
 import { UploadManager, sweepPersisted, type UploadTask } from '@/utils/upload'
 import { formatBytes, formatDuration, formatSpeed } from '@/utils/format'
+
+const emit = defineEmits<{ (e: 'uploaded'): void }>()
 
 const router = useRouter()
 const message = useMessage()
@@ -45,6 +43,8 @@ function ensureManager(): UploadManager {
       onDone: (t) => {
         message.success(`「${t.file.name}」已上传`)
         tasks.value = [...tasks.value]
+        // 通知父级刷新列表，新文件立刻可见
+        emit('uploaded')
       },
       onError: (t) => {
         message.error(`「${t.file.name}」上传失败：${t.error}`)
@@ -65,7 +65,7 @@ async function loadConfig() {
   }
 }
 
-/** 处理 n-upload 选中的文件：前端即时校验，不合格直接拦截。 */
+/** 处理选中的文件：前端即时校验，不合格直接拦截。 */
 function onBeforeUpload(data: { file: UploadFileInfo }): boolean {
   const raw = data.file.file
   if (!raw) return false
@@ -154,14 +154,6 @@ function stateType(t: UploadTask): 'default' | 'success' | 'error' | 'warning' |
   return 'default'
 }
 
-/** 上传限制：拆成独立标签，比一整句拼接文字更好扫读。 */
-const limitTags = computed(() => {
-  if (!configLoaded.value) return []
-  const tags = [`最大 ${uploadState.maxFileSizeMB} MB`]
-  tags.push(uploadState.allowAll ? '不限类型' : uploadState.allowedExtensions.join(' / '))
-  return tags
-})
-
 const uploadDisabled = computed(() => configLoaded.value && !uploadState.uploadEnabled)
 
 onMounted(() => {
@@ -171,53 +163,43 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="upload-page">
+  <div class="upload-panel">
+    <!-- 异常态：必须说明原因，否则用户不知道为何拖不进去 -->
     <n-alert v-if="uploadDisabled" type="warning" title="上传已暂停">
       管理员已暂停上传功能。
     </n-alert>
 
-    <n-card class="card-surface" :bordered="false">
-      <div class="section-head">
-        <div class="section-head__title">上传文件</div>
-        <div class="limit-tags">
-          <n-tag v-for="tag in limitTags" :key="tag" size="small" :bordered="false">{{ tag }}</n-tag>
+    <n-upload
+      multiple
+      :show-file-list="false"
+      :disabled="uploadDisabled"
+      :custom-request="() => {}"
+      @before-upload="onBeforeUpload"
+    >
+      <!-- 紧凑单行拖拽条：整块文件区域都是上传入口，不额外占一屏 -->
+      <n-upload-dragger class="drop">
+        <div class="drop__inner">
+          <n-icon :size="20"><cloud-upload-outline /></n-icon>
+          <span class="drop__text">拖入文件，或点击选择</span>
         </div>
-      </div>
+      </n-upload-dragger>
+    </n-upload>
 
-      <n-upload
-        multiple
-        :show-file-list="false"
-        :disabled="uploadDisabled"
-        :custom-request="() => {}"
-        @before-upload="onBeforeUpload"
-      >
-        <n-upload-dragger class="dragger">
-          <div class="dragger-inner">
-            <div class="dragger-icon">
-              <n-icon :size="30"><cloud-upload-outline /></n-icon>
-            </div>
-            <div class="dragger-title">点击或拖拽文件到此处</div>
-          </div>
-        </n-upload-dragger>
-      </n-upload>
-    </n-card>
-
-    <n-card class="card-surface" :bordered="false">
-      <div class="section-head">
-        <div class="section-head__title">
+    <!-- 队列仅在真的有任务时出现，平时不占空间 -->
+    <div v-if="tasks.length" class="queue">
+      <div class="queue__head">
+        <span class="queue__title">
           上传队列
           <n-tag v-if="activeCount" size="small" type="info" :bordered="false">
             {{ activeCount }} 进行中
           </n-tag>
-        </div>
+        </span>
         <n-button size="small" quaternary :disabled="!finishedCount" @click="clearFinished">
           清除已完成
         </n-button>
       </div>
 
-      <n-empty v-if="!tasks.length" description="暂无上传任务" style="padding: 24px 0" />
-
-      <ul v-else class="task-list">
+      <ul class="task-list">
         <li v-for="t in tasks" :key="t.id" class="task">
           <div class="task__head">
             <span class="task__name" :title="t.file.name">{{ t.file.name }}</span>
@@ -247,7 +229,13 @@ onMounted(() => {
             <span v-else-if="t.error" class="task__error">{{ t.error }}</span>
             <span class="task__spacer" />
 
-            <n-button v-if="t.state === 'done' && t.result" size="small" quaternary type="primary" @click="previewFile(t)">
+            <n-button
+              v-if="t.state === 'done' && t.result"
+              size="small"
+              quaternary
+              type="primary"
+              @click="previewFile(t)"
+            >
               预览
             </n-button>
             <n-button v-if="t.state === 'error'" size="small" quaternary type="primary" @click="retry(t)">
@@ -275,49 +263,58 @@ onMounted(() => {
           </div>
         </li>
       </ul>
-    </n-card>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.upload-page {
+.upload-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
-}
-
-.limit-tags {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
-.dragger :deep(.n-upload-dragger) {
-  padding: 26px 16px;
-}
-
-.dragger-inner {
-  display: grid;
   gap: 12px;
-  justify-items: center;
+  min-width: 0;
 }
 
-.dragger-icon {
+/* 紧凑拖拽条：单行高度，不抢文件列表的视觉重心 */
+.drop :deep(.n-upload-dragger) {
+  padding: 10px 14px;
+}
+
+.drop__inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.drop__text {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.queue {
   display: grid;
-  width: 54px;
-  height: 54px;
-  place-items: center;
-  border-radius: 16px;
-  color: var(--color-primary);
-  background: var(--color-primary-soft);
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 10px;
 }
 
-.dragger-title {
+.queue__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.queue__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--color-text-strong);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 650;
 }
 
 .task-list {
@@ -326,7 +323,7 @@ onMounted(() => {
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   gap: 10px;
-  margin: 12px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -383,15 +380,6 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
-  .section-head {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .limit-tags {
-    justify-content: flex-start;
-  }
-
   /* 移动端：进度信息换行到操作键上方，避免挤压 */
   .task__foot {
     flex-wrap: wrap;

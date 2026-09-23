@@ -7,7 +7,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"lan-drive/internal/model"
 	"lan-drive/internal/upload"
 )
 
@@ -117,8 +116,6 @@ func (h *Handler) CompleteUpload(c *gin.Context) {
 		return
 	}
 	if res.Created {
-		h.audit(c, model.ActUpload, "file", itoa(res.File.ID),
-			"上传文件 "+res.File.OriginalNam+"（"+fmtBytes(res.File.SizeBytes)+"）")
 	}
 	ok(c, res)
 }

@@ -64,9 +64,6 @@ func TestLoadDefaults(t *testing.T) {
 	if c.AdminName != "系统管理员" {
 		t.Fatalf("默认管理员姓名 = %q", c.AdminName)
 	}
-	if c.LogKeepDays != 90 {
-		t.Fatalf("默认日志保留天数 = %d", c.LogKeepDays)
-	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -80,7 +77,6 @@ func TestLoadOverrides(t *testing.T) {
 		"LANDRIVE_ADMIN_PASSWORD":    "secret-pass",
 		"LANDRIVE_ADMIN_NAME":        "管理员甲",
 		"LANDRIVE_TRUST_PROXY":       "true",
-		"LANDRIVE_LOG_KEEP_DAYS":     "30",
 		"LANDRIVE_CORS_ALLOW":        "http://localhost:5173, http://127.0.0.1:5173",
 	})
 	c, err := Load()
@@ -96,26 +92,27 @@ func TestLoadOverrides(t *testing.T) {
 	if !c.TrustProxy {
 		t.Fatalf("信任代理开关未生效")
 	}
-	if c.LogKeepDays != 30 {
-		t.Fatalf("日志保留天数未生效: %d", c.LogKeepDays)
-	}
 	if len(c.CORSAllow) != 2 || c.CORSAllow[0] != "http://localhost:5173" {
 		t.Fatalf("CORS 白名单解析错误: %v", c.CORSAllow)
 	}
 }
 
-func TestLoadInvalidNumbersFallBackToDefaults(t *testing.T) {
+func TestLoadInvalidBoolFallsBackToDefault(t *testing.T) {
 	setEnv(t, map[string]string{
-		"LANDRIVE_MYSQL_DSN":     "u:p@tcp(127.0.0.1:3306)/db",
-		"LANDRIVE_JWT_SECRET":    strings.Repeat("s", 32),
-		"LANDRIVE_LOG_KEEP_DAYS": "not-a-number",
+		"LANDRIVE_MYSQL_DSN":      "u:p@tcp(127.0.0.1:3306)/db",
+		"LANDRIVE_JWT_SECRET":     strings.Repeat("s", 32),
+		"LANDRIVE_TRUST_PROXY":    "not-a-bool",
+		"LANDRIVE_AUTO_CREATE_DB": "also-not-a-bool",
 	})
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if c.LogKeepDays != 90 {
-		t.Fatalf("非法数字应回退默认: %d", c.LogKeepDays)
+	if c.TrustProxy {
+		t.Fatalf("非法布尔值应回退默认 false")
+	}
+	if !c.AutoCreateDB {
+		t.Fatalf("非法布尔值应回退默认 true")
 	}
 }
 

@@ -43,7 +43,6 @@ type Handler struct {
 	tokens  *auth.TokenManager
 	limiter *auth.Limiter
 	users   *auth.UserCache[*model.User]
-	logKeep int
 	started time.Time
 }
 
@@ -56,7 +55,6 @@ type Deps struct {
 	Uploads  *upload.Service
 	Maintain *maintain.Service
 	Tokens   *auth.TokenManager
-	LogKeep  int
 }
 
 // New 构造 Handler。
@@ -71,7 +69,6 @@ func New(d Deps) *Handler {
 		tokens:  d.Tokens,
 		limiter: auth.NewLimiter(5, 5*time.Minute),
 		users:   auth.NewUserCache[*model.User](15 * time.Second),
-		logKeep: d.LogKeep,
 		started: time.Now(),
 	}
 }
@@ -102,6 +99,8 @@ func failErr(c *gin.Context, err error, fallback string) {
 		fail(c, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrState):
 		fail(c, http.StatusConflict, err.Error())
+	case errors.Is(err, files.ErrCannotPinSelf):
+		fail(c, http.StatusBadRequest, err.Error())
 	case errors.Is(err, files.ErrForbidden), errors.Is(err, upload.ErrForbidden):
 		fail(c, http.StatusForbidden, err.Error())
 	case errors.Is(err, upload.ErrTooLarge):
@@ -215,30 +214,6 @@ func currentUser(c *gin.Context) *model.User {
 	}
 	u, _ := v.(*model.User)
 	return u
-}
-
-// --- 审计日志 ---
-
-// audit 记录一条操作日志。
-func (h *Handler) audit(c *gin.Context, action, targetType, targetID, detail string) {
-	u := currentUser(c)
-	e := &model.LogEntry{
-		Action:     action,
-		TargetType: targetType,
-		TargetID:   targetID,
-		Detail:     detail,
-		IP:         clientIP(c),
-	}
-	if u != nil {
-		id := u.ID
-		e.UserID = &id
-		e.EmployeeNo = u.EmployeeNo
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := h.store.InsertLog(ctx, e); err != nil {
-		slog.Warn("写审计日志失败", "action", action, "error", err)
-	}
 }
 
 // clientIP 返回客户端 IP（仅在信任代理时采信 X-Forwarded-For）。

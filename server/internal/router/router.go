@@ -55,6 +55,9 @@ func New(h *handler.Handler, cfg *config.Config) *gin.Engine {
 			// 文件：所有登录用户可读、可预览、可下载任意人的文件
 			authed.GET("/files", h.ListFiles)
 			authed.GET("/files/owners", h.ListOwners)
+			// 置顶是"每人各一份"的个人偏好，因此放在登录档而非管理员档。
+			authed.PUT("/files/owners/:id/pin", h.PinOwner)
+			authed.DELETE("/files/owners/:id/pin", h.UnpinOwner)
 			authed.GET("/files/:id", h.GetFile)
 			authed.GET("/files/:id/preview", h.PreviewInfo)
 			authed.GET("/files/:id/content", h.ServeContent)
@@ -85,9 +88,6 @@ func New(h *handler.Handler, cfg *config.Config) *gin.Engine {
 				admin.GET("/files", h.AdminListFiles)
 				admin.POST("/files/:id/restore", h.RestoreFile)
 				admin.DELETE("/files/:id", h.PurgeFile)
-
-				admin.GET("/logs", h.ListLogs)
-				admin.GET("/logs/actions", h.LogActions)
 
 				admin.GET("/stats", h.Stats)
 				admin.GET("/stats/ext", h.ExtStats)
