@@ -168,10 +168,26 @@ if command -v nginx >/dev/null 2>&1; then
   trap 'rm -rf "$WORK" "$NGX"' EXIT
   mkdir -p "$NGX/conf.d" "$NGX/logs" "$NGX/html"
   echo '<html>ok</html>' > "$NGX/html/index.html"
-  # 复用被测的站点配置，仅把路径/端口指向临时目录
-  sed -e "s|include /etc/nginx/proxy.d/\*\.conf;|include $NGX/proxy.d/*.conf;|" \
+  # 复用被测的站点配置，仅把路径/端口指向临时目录。
+  # 注意 include 的目标是具体的 api.conf（不是 *.conf），模式必须与实际一致，
+  # 否则替换静默失败、测试会去读镜像内的绝对路径而"假通过"。
+  sed -e "s|include /etc/nginx/proxy.d/api.conf;|include $NGX/proxy.d/api.conf;|" \
       -e "s|root /usr/share/nginx/html;|root $NGX/html;|" \
       -e 's|listen 80;|listen 18099;|' "$ROOT/nginx.conf" > "$NGX/conf.d/default.conf"
+
+  # 断言替换确实生效：若 include 仍指向镜像内路径，后续校验毫无意义。
+  # 只看 include 指令行：nginx.conf 的注释里也提到该路径，直接 grep 会误报。
+  if grep -E '^[[:space:]]*include[[:space:]]+/etc/nginx/proxy.d/' "$NGX/conf.d/default.conf" >/dev/null; then
+    fail "测试自身的 include 重写未生效（模式与 nginx.conf 不一致），校验结果不可信"
+  fi
+  if ! grep -qE "^[[:space:]]*include[[:space:]]+$NGX/proxy.d/api.conf;" "$NGX/conf.d/default.conf"; then
+    fail "测试自身的 include 重写结果不正确"
+  fi
+  # 临时目录也可能被残留的绝对路径影响：确保那个路径此时不存在或不可读，
+  # 否则 nginx 会读到镜像外的文件，"通过"不代表镜像内的配置正确。
+  if [ -e /etc/nginx/proxy.d/api.conf ]; then
+    printf '  ℹ️  检测到 /etc/nginx/proxy.d/api.conf（本机残留），已在本测试中忽略\n'
+  fi
   cat > "$NGX/nginx.conf" <<EOF
 worker_processes 1;
 error_log $NGX/logs/error.log warn;
@@ -191,19 +207,21 @@ EOF
   mkdir -p "$NGX/proxy.d"
   # 未反代（默认 JSON 404）
   cp "$ROOT/proxy.d/api.conf" "$NGX/proxy.d/api.conf"
-  if nginx -t -c "$NGX/nginx.conf" >/dev/null 2>&1; then
+  if NGX_OUT=$(nginx -t -c "$NGX/nginx.conf" 2>&1); then
     pass "默认（未反代）配置可被 nginx 解析"
   else
     fail "默认配置无法被 nginx 解析"
+    printf '%s\n' "$NGX_OUT" | sed 's/^/     /'
   fi
   # 反代：上游主机不存在时也必须能解析（靠变量 + resolver 延迟解析）
   reset_proxy
   run_entrypoint LANDRIVE_API_PROXY=backend-not-exist:8080 LANDRIVE_DNS_RESOLVER=127.0.0.11
   cp "$WORK/proxy.d/api.conf" "$NGX/proxy.d/api.conf"
-  if nginx -t -c "$NGX/nginx.conf" >/dev/null 2>&1; then
+  if NGX_OUT=$(nginx -t -c "$NGX/nginx.conf" 2>&1); then
     pass "上游不存在时配置仍可解析（nginx 不会因后端未就绪而起不来）"
   else
     fail "上游不存在导致配置无法解析（后端未就绪时整个前端会启动失败）"
+    printf '%s\n' "$NGX_OUT" | sed 's/^/     /'
   fi
 else
   printf '  ⚠️  未安装 nginx，跳过配置解析校验（CI 中会执行）\n'
