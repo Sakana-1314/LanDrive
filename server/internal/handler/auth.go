@@ -2,14 +2,17 @@ package handler
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"lan-drive/internal/auth"
 	"lan-drive/internal/model"
 	"lan-drive/internal/settings"
+	"lan-drive/internal/storage"
 	"lan-drive/internal/store"
 )
 
@@ -163,8 +166,11 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "工号长度不能超过 32 个字符")
 		return
 	}
-	if strings.ContainsAny(req.EmployeeNo, " \t/\\") {
-		fail(c, http.StatusBadRequest, "工号不能包含空格或路径分隔符")
+	// 工号会直接作为磁盘目录名（数据落盘后一眼看出是谁的文件），
+	// 因此这里按路径段的规则校验，而不是只挡空格与分隔符 ——
+	// 否则会等到建目录那一步才报错，提示也不清楚。
+	if _, err := storage.UserDirName(req.EmployeeNo); err != nil {
+		fail(c, http.StatusBadRequest, "工号只能包含字母、数字、下划线、连字符和点")
 		return
 	}
 	if req.Role != model.RoleAdmin && req.Role != model.RoleUser {
@@ -192,8 +198,9 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		failErr(c, err, "创建用户失败")
 		return
 	}
-	// 目录名依赖自增主键，因此创建后立刻建目录并把相对路径写回数据库。
-	dirRel, err := h.st.EnsureUserDir(u.ID)
+	// 目录名用工号（数据落盘后一眼能看出是谁的），因此创建前先校验工号
+	// 是否是合法的路径段 —— 它会被直接用于拼磁盘路径。
+	dirRel, err := h.st.EnsureUserDir(u.EmployeeNo)
 	if err != nil {
 		// 目录建不出来就回滚账号，避免出现没有目录的账号。
 		_ = h.store.DeleteUser(c.Request.Context(), u.ID)
@@ -203,6 +210,8 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	u.DirRel = dirRel
 	if err := h.store.SetUserDirRel(c.Request.Context(), u.ID, dirRel); err != nil {
 		_ = h.store.DeleteUser(c.Request.Context(), u.ID)
+		// 目录已建出但账号要回滚，一并删掉，避免留下无主空目录。
+		_ = h.maint.CleanupUserDir(dirRel)
 		failErr(c, err, "初始化用户目录失败")
 		return
 	}
@@ -317,8 +326,13 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 
 // DeleteUser 处理 DELETE /api/admin/users/:id。
 //
-// 默认拒绝删除仍有文件的账号（409 并附文件数）；显式传 ?purge_files=1 时
-// 先彻底删除其全部文件（磁盘 + 记录）再删账号。
+// DeleteUser 处理 DELETE /api/admin/users/:id。
+//
+// 语义：**清理该账号名下所有文件后才能删除账号**。
+// 「清理」= 软删除（进回收站），不需要彻底抹掉，避免误操作不可恢复。
+// 账号删除后其所属目录（含回收站里的文件）一并从磁盘移除 ——
+// 磁盘路径是按工号命名的，同一工号将来重建账号时会复用同名目录，
+// 若把旧文件留在那里就会变成新账号"继承"前任的文件。
 func (h *Handler) DeleteUser(c *gin.Context) {
 	id, valid := pathInt64(c, "id")
 	if !valid {
@@ -340,21 +354,15 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		}
 	}
 
-	fileCount, err := h.store.CountFilesByOwner(c.Request.Context(), id)
+	// 先把名下所有文件软删除（进回收站）。
+	// 全部 active 文件都置为 trashed 即视为"已清理"，随后账号才允许删除。
+	softDeleted, err := h.store.SoftDeleteAllByOwner(c.Request.Context(), id, time.Now().UTC())
 	if err != nil {
-		failErr(c, err, "统计用户文件失败")
-		return
-	}
-	purge := strings.TrimSpace(c.Query("purge_files")) == "1"
-	if fileCount > 0 && !purge {
-		c.JSON(http.StatusConflict, gin.H{
-			"error":      fmt.Sprintf("该账号仍有 %d 个文件，删除后这些文件将无法恢复。如需一并删除请勾选“同时彻底删除文件”", fileCount),
-			"file_count": fileCount,
-		})
+		failErr(c, err, "清理该账号文件失败")
 		return
 	}
 
-	// 先终止该用户未完成的上传会话与分片。
+	// 终止该用户未完成的上传会话与分片。
 	sessions, err := h.store.ListUploadSessionsByOwner(c.Request.Context(), id, model.UploadUploading)
 	if err != nil {
 		failErr(c, err, "清理该账号上传会话失败")
@@ -364,25 +372,24 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		_ = h.uploads.Abort(c.Request.Context(), &sessions[i])
 	}
 
-	deleted := 0
-	if fileCount > 0 {
-		n, err := h.files.PurgeByOwner(c.Request.Context(), id)
-		if err != nil {
-			failErr(c, err, fmt.Sprintf("删除该账号文件时失败（已删除 %d 个）", n))
-			return
-		}
-		deleted = n
+	// 账号删除后，其文件记录与磁盘目录一并清掉。
+	// 顺序很关键：先删记录（外键 RESTRICT 要求文件不再引用该账号），再删账号。
+	purged, err := h.files.PurgeByOwner(c.Request.Context(), id)
+	if err != nil {
+		failErr(c, err, fmt.Sprintf("清理该账号文件失败（已清理 %d 个，可重试）", purged))
+		return
 	}
 	if err := h.store.DeleteUser(c.Request.Context(), id); err != nil {
 		failErr(c, err, "删除账号失败")
 		return
 	}
-	// 账号删除后再删目录，避免遗留空目录。
-	if err := h.maint.CleanupUserDir(id); err != nil {
-		// 目录删除失败不影响账号删除结果，记录日志由孤儿扫描兜底。
+	// 账号已删除，目录若残留会是同名工号重建时的"前任文件"，因此必须清掉。
+	// 失败不影响删除结果（记录只作提示），由一致性扫描兜底发现。
+	if err := h.maint.CleanupUserDir(target.DirRel); err != nil {
+		slog.Warn("删除账号后清理其目录失败", "dir", target.DirRel, "error", err)
 	}
 	h.users.Invalidate(id)
-	ok(c, gin.H{"ok": true, "deleted_files": deleted})
+	ok(c, gin.H{"ok": true, "soft_deleted": softDeleted, "purged": purged})
 }
 
 // GetSettings 处理 GET /api/admin/settings。

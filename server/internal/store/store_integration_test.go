@@ -783,12 +783,85 @@ func createTestUser(t *testing.T, st *Store, employeeNo, name string) *model.Use
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatalf("CreateUser(%s): %v", employeeNo, err)
 	}
-	dirRel := "users/" + itoaTest(u.ID)
+	// 目录就是工号（与生产一致）。
+	dirRel := "users/" + employeeNo
 	if err := st.SetUserDirRel(ctx, u.ID, dirRel); err != nil {
 		t.Fatalf("SetUserDirRel: %v", err)
 	}
 	u.DirRel = dirRel
 	return u
+}
+
+// TestSoftDeleteAllByOwner 覆盖删除账号前的「清理文件」步骤。
+//
+// 需求：删除用户必须先清理其所有文件（软删除即可）。
+// 这里只把 active 置为 trashed，已在回收站里的不动
+// （否则会刷新 deleted_at，把保留期无端延长）。
+func TestSoftDeleteAllByOwner(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	owner := createTestUser(t, st, "50001", "待删除的人")
+	other := createTestUser(t, st, "50002", "无关的人")
+
+	mk := func(u *model.User, name string) *model.File {
+		f := &model.File{
+			OwnerID: u.ID, OriginalNam: name, Ext: ".bin", SizeBytes: 10,
+			Mime: "application/octet-stream", SHA256: strings.Repeat("a", 64),
+			RelPath: u.DirRel + "/" + name, Status: model.StatusActive,
+			ExpiresAt: time.Now().UTC().AddDate(0, 0, 15),
+		}
+		if err := st.CreateFile(ctx, f); err != nil {
+			t.Fatalf("CreateFile(%s): %v", name, err)
+		}
+		return f
+	}
+	mk(owner, "1.bin")
+	mk(owner, "2.bin")
+	mk(other, "9.bin")
+
+	// 先把其中一个放进回收站，验证它不会被二次软删改动时间戳。
+	list, err := st.ListFilesByOwner(ctx, owner.ID)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("ListFilesByOwner = %d, err=%v", len(list), err)
+	}
+	already := list[0]
+	oldTime := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	if err := st.MarkTrashed(ctx, already.ID, oldTime, oldTime.AddDate(0, 0, 7)); err != nil {
+		t.Fatalf("MarkTrashed: %v", err)
+	}
+
+	n, err := st.SoftDeleteAllByOwner(ctx, owner.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("SoftDeleteAllByOwner: %v", err)
+	}
+	// 只有 1 个还是 active，因此应只影响 1 行。
+	if n != 1 {
+		t.Fatalf("应只软删 1 个 active 文件，实际 %d", n)
+	}
+
+	cnt, _, err := st.ActiveUsageByOwner(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("ActiveUsageByOwner: %v", err)
+	}
+	if cnt != 0 {
+		t.Fatalf("软删后不应还有 active 文件，实际 %d", cnt)
+	}
+	after, err := st.GetFile(ctx, already.ID)
+	if err != nil {
+		t.Fatalf("GetFile: %v", err)
+	}
+	if after.DeletedAt == nil || !after.DeletedAt.UTC().Truncate(time.Second).Equal(oldTime) {
+		t.Fatalf("已在回收站的文件不应被改动 deleted_at：期望 %v，实际 %v", oldTime, after.DeletedAt)
+	}
+
+	// 不能误伤其他账号的文件。
+	otherCnt, _, err := st.ActiveUsageByOwner(ctx, other.ID)
+	if err != nil {
+		t.Fatalf("ActiveUsageByOwner(other): %v", err)
+	}
+	if otherCnt != 1 {
+		t.Fatalf("不应影响其他账号的文件，对方 active = %d", otherCnt)
+	}
 }
 
 func itoaTest(n int64) string {

@@ -115,12 +115,50 @@ func (s *Storage) Abs(rel string) (string, error) {
 	return full, nil
 }
 
-// UserDirRel 返回用户目录的相对路径（users/<id>）。
-func UserDirRel(userID int64) string { return fmt.Sprintf("users/%d", userID) }
+// UserDirName 校验并返回用户目录名（即工号）。
+//
+// 目录名直接用工号而不是自增 id：数据落盘后看一眼目录就知道是谁的文件，
+// 也便于运维按工号定位与备份。代价是**工号一旦确定就不能再改** ——
+// 改了会让已有文件留在旧目录里成为孤儿，所以工号是账号的不可变标识
+// （见 handler.UpdateUser：它的请求体不接受 employee_no）。
+//
+// 工号要当作路径段使用，因此这里做严格校验：只允许字母、数字、下划线、
+// 连字符和点，且不能是 "." / ".." / 空串。比 handler 的宽松校验更严，
+// 因为这是拼磁盘路径的最后一道关。
+func UserDirName(employeeNo string) (string, error) {
+	no := strings.TrimSpace(employeeNo)
+	if no == "" {
+		return "", fmt.Errorf("%w: 工号不能为空", ErrInvalidRel)
+	}
+	if no == "." || no == ".." {
+		return "", fmt.Errorf("%w: 工号不能是 %q", ErrInvalidRel, no)
+	}
+	for _, r := range no {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.':
+		default:
+			return "", fmt.Errorf("%w: 工号含非法字符 %q（只允许字母、数字、_ - .）", ErrInvalidRel, r)
+		}
+	}
+	// 交给 SafeRel 再确认一次：目录名必须是合法的单层路径段。
+	if _, err := SafeRel("users/" + no); err != nil {
+		return "", err
+	}
+	return no, nil
+}
 
-// FileRel 返回文件最终存储的相对路径（users/<ownerID>/<fileID><ext>）。
-func FileRel(ownerID, fileID int64, ext string) string {
-	return fmt.Sprintf("users/%d/%d%s", ownerID, fileID, NormalizeExt(ext))
+// UserDirRel 返回用户目录的相对路径（users/<工号>）。
+// 入参必须是已通过 UserDirName 校验的工号。
+func UserDirRel(employeeNo string) string { return "users/" + employeeNo }
+
+// FileRel 返回文件最终存储的相对路径（<用户目录>/<fileID><ext>）。
+//
+// 入参是**用户目录**而不是 owner id：上传会话在创建时就把目标目录记了下来
+// （upload_sessions.dir_rel），合并时沿用同一个值即可。这样存量数据
+// （早期版本按 users/<id> 落盘）无需迁移也能继续正确写入自己的目录。
+func FileRel(ownerDirRel string, fileID int64, ext string) string {
+	return fmt.Sprintf("%s/%d%s", ownerDirRel, fileID, NormalizeExt(ext))
 }
 
 // ChunkRel 返回一个分片文件的相对路径（tmp/chunks/<uploadID>/<idx>.part）。
@@ -228,9 +266,13 @@ func JoinName(base, ext string) string {
 	return base + ext
 }
 
-// EnsureUserDir 创建用户目录，返回其相对路径。
-func (s *Storage) EnsureUserDir(userID int64) (string, error) {
-	rel := UserDirRel(userID)
+// EnsureUserDir 创建用户目录（users/<工号>），返回其相对路径。
+func (s *Storage) EnsureUserDir(employeeNo string) (string, error) {
+	name, err := UserDirName(employeeNo)
+	if err != nil {
+		return "", err
+	}
+	rel := UserDirRel(name)
 	abs, err := s.Abs(rel)
 	if err != nil {
 		return "", err
