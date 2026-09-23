@@ -238,6 +238,15 @@ else
   bad "合并失败：$COMPLETE"
 fi
 
+# /api/auth/me 必须带上真实的文件数与占用。
+# 这是一个曾经真实存在的缺陷：users 表没有这两个聚合列，若直接外发查询结果
+# 会恒为 0，界面顶栏永远显示「0 个文件 · 0 B」。
+USAGE="$(api GET /api/auth/me "$UTOKEN" '')"
+ME_FILES=$(jget "$USAGE" "j.get('user',{}).get('file_count',0)")
+ME_BYTES=$(jget "$USAGE" "j.get('user',{}).get('used_bytes',0)")
+[ "${ME_FILES:-0}" -gt 0 ] && ok "/auth/me 返回文件数 $ME_FILES（不是恒为 0）" || bad "/auth/me 的 file_count 为 0，使用量聚合未生效"
+[ "${ME_BYTES:-0}" -gt 0 ] && ok "/auth/me 返回占用 $ME_BYTES 字节" || bad "/auth/me 的 used_bytes 为 0，使用量聚合未生效"
+
 # 重复 complete 应幂等返回同一文件。
 RECOMPLETE="$(api POST "/api/uploads/$UPLOAD_ID/complete" "$UTOKEN" '')"
 RE_ID="$(jget "$RECOMPLETE" "j.get('file',{}).get('id','')")"

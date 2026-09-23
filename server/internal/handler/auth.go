@@ -82,12 +82,13 @@ func (h *Handler) publicWithUsage(c *gin.Context, u *model.User) *model.User {
 	if out == nil {
 		return nil
 	}
+	// 用 ActiveUsageByOwner 而非 CountFilesByOwner：后者不过滤 status，
+	// 会把回收站里的文件也算进"我的文件数"，与「我的文件」列表的口径不符。
+	// 文件数与占用一次查出，避免两次查询之间状态变化导致数字自相矛盾。
 	// 统计失败不该让 /me 整体失败：退化为 0 也比登录态报错强。
-	if n, err := h.store.CountFilesByOwner(c.Request.Context(), u.ID); err == nil {
+	if n, bytes, err := h.store.ActiveUsageByOwner(c.Request.Context(), u.ID); err == nil {
 		out.FileCount = n
-	}
-	if b, err := h.store.UsedBytesByOwner(c.Request.Context(), u.ID); err == nil {
-		out.UsedBytes = b
+		out.UsedBytes = bytes
 	}
 	return out
 }

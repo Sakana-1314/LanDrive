@@ -381,10 +381,28 @@ func (s *Store) ListFilesByOwner(ctx context.Context, ownerID int64) ([]model.Fi
 }
 
 // CountFilesByOwner 统计某用户的全部文件数（用于删除账号前的 409 提示）。
+//
+// 注意这里**不按 status 过滤**：删除账号前要提示「该账号还有 N 个文件」，
+// 回收站里的也算。若要展示给用户看的"我的文件数"，请用 ActiveUsageByOwner。
 func (s *Store) CountFilesByOwner(ctx context.Context, ownerID int64) (int64, error) {
 	var n int64
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE owner_id = ?`, ownerID).Scan(&n)
 	return n, err
+}
+
+// ActiveUsageByOwner 返回某用户 active 文件的个数与总占用。
+//
+// 为什么两个值一次查：文件数与占用必须来自同一时刻的同一口径。
+// 分成两次查询时，若中间有文件到期或删除，会出现"3 个文件 · 只统计了 2 个的大小"
+// 这类自相矛盾的展示。口径与用户管理页 / 我的文件列表一致：只算 active，
+// 回收站里的不计入。
+func (s *Store) ActiveUsageByOwner(ctx context.Context, ownerID int64) (int64, int64, error) {
+	var n, bytes int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM files
+		 WHERE owner_id = ? AND status = ?`,
+		ownerID, model.StatusActive).Scan(&n, &bytes)
+	return n, bytes, err
 }
 
 // AllRelPaths 返回所有文件的相对路径（一致性扫描用）。
@@ -427,13 +445,4 @@ func (s *Store) Stats(ctx context.Context, now time.Time) (model.Stats, error) {
 	).Scan(&st.Users, &st.Files, &st.Trashed, &st.TotalBytes, &st.TrashedBytes,
 		&st.Expiring7d, &st.UploadsInProgress, &st.ExpiredNotPurged)
 	return st, err
-}
-
-// UsedBytesByOwner 返回某用户 active 文件占用（新文件入库前的配额参考，当前未启用硬配额）。
-func (s *Store) UsedBytesByOwner(ctx context.Context, ownerID int64) (int64, error) {
-	var n int64
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(size_bytes),0) FROM files WHERE owner_id = ? AND status = ?`,
-		ownerID, model.StatusActive).Scan(&n)
-	return n, err
 }

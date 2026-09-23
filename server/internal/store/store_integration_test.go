@@ -703,6 +703,76 @@ func TestOwnerPins(t *testing.T) {
 	}
 }
 
+// TestOwnerUsageAggregates 覆盖「我的文件数 / 占用」聚合。
+//
+// 为什么单独立一个测试：users 表里没有这两列，/auth/me 若直接外发查询结果会
+// 恒为 0，顶栏就永远显示「0 个文件 · 0 B」（曾经的真实缺陷）。
+//
+// 同时守住一个容易踩的口径问题：必须只算 active。CountFilesByOwner 是给
+// "删账号前提示还有几个文件"用的，不过滤 status；误用它做展示会把回收站
+// 里的文件也算进去，与「我的文件」列表数量对不上。
+func TestOwnerUsageAggregates(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	owner := createTestUser(t, st, "30001", "有文件的人")
+
+	dir := "users/" + itoaTest(owner.ID)
+	sizes := []int64{1024, 2048, 4096}
+	for i, size := range sizes {
+		f := &model.File{
+			OwnerID: owner.ID, OriginalNam: "f" + itoaTest(int64(i)) + ".bin",
+			Ext: ".bin", SizeBytes: size, Mime: "application/octet-stream",
+			SHA256:  strings.Repeat("a", 64),
+			RelPath: dir + "/" + itoaTest(int64(i+1)) + ".bin",
+			Status:  model.StatusActive, ExpiresAt: time.Now().UTC().AddDate(0, 0, 15),
+		}
+		if err := st.CreateFile(ctx, f); err != nil {
+			t.Fatalf("CreateFile: %v", err)
+		}
+	}
+
+	var wantBytes int64
+	for _, s := range sizes {
+		wantBytes += s
+	}
+
+	gotCount, gotBytes, err := st.ActiveUsageByOwner(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("ActiveUsageByOwner: %v", err)
+	}
+	if gotCount != int64(len(sizes)) {
+		t.Fatalf("active 文件数 = %d，应为 %d", gotCount, len(sizes))
+	}
+	if gotBytes != wantBytes {
+		t.Fatalf("active 占用 = %d，应为 %d", gotBytes, wantBytes)
+	}
+
+	// 回收站里的文件不应计入占用与计数 —— 与用户管理页口径保持一致。
+	list, err := st.ListFilesByOwner(ctx, owner.ID)
+	if err != nil || len(list) != len(sizes) {
+		t.Fatalf("ListFilesByOwner 数量不符: %d, err=%v", len(list), err)
+	}
+	trashed := list[len(list)-1]
+	if err := st.MarkTrashed(ctx, trashed.ID, time.Now().UTC(), time.Now().UTC().AddDate(0, 0, 7)); err != nil {
+		t.Fatalf("MarkTrashed: %v", err)
+	}
+	gotCount, gotBytes, err = st.ActiveUsageByOwner(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("ActiveUsageByOwner: %v", err)
+	}
+	if gotCount != int64(len(sizes)-1) {
+		t.Fatalf("回收站文件不应计入文件数：active 文件数 = %d，应为 %d", gotCount, len(sizes)-1)
+	}
+	if gotBytes != wantBytes-trashed.SizeBytes {
+		t.Fatalf("回收站文件不应计入占用：active 占用 = %d，应为 %d",
+			gotBytes, wantBytes-trashed.SizeBytes)
+	}
+	// 而删除账号前的提示要算上回收站，两者口径必须不同。
+	if n, err := st.CountFilesByOwner(ctx, owner.ID); err != nil || n != int64(len(sizes)) {
+		t.Fatalf("CountFilesByOwner 应含回收站文件 = %d, err=%v（应为 %d）", n, err, len(sizes))
+	}
+}
+
 func createTestUser(t *testing.T, st *Store, employeeNo, name string) *model.User {
 	t.Helper()
 	ctx := context.Background()
