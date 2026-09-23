@@ -22,6 +22,7 @@ GOFLAGS := -tags nomsgpack -buildvcs=false -trimpath -ldflags "-s -w -X main.ver
 CGO_ENABLED := 0
 
 .PHONY: help all server webinstall web webbuild build run webdev test vet fmt check \
+        docsinstall docs docsdev \
         docker pull up up-all up-build down down-all clean clean-data \
         build-linux-amd64 build-linux-arm64
 
@@ -47,6 +48,11 @@ help:
 	@echo "    make down         停止容器"
 	@echo "    make docker       本地构建镜像（server + web）"
 	@echo "    make pull         拉取 ghcr 上的固定 tag 镜像"
+	@echo ""
+	@echo "  文档站（VitePress，源码在 docs/websites）"
+	@echo "    make docsinstall  安装文档站依赖"
+	@echo "    make docs         构建文档站 → docs/websites/.vitepress/dist"
+	@echo "    make docsdev      文档站开发服务器（:5173）"
 	@echo ""
 	@echo "  make build          前后端全部构建（server + web）"
 
@@ -97,11 +103,29 @@ web: webinstall
 webdev:
 	cd $(WEB) && npm run dev
 
+# ============ 文档站（VitePress） ============
+
+## 安装文档站依赖（--include=dev：NODE_ENV=production 时会跳过 devDependencies，
+## 而 VitePress 本身就在 devDependencies 里）
+docsinstall:
+	cd docs/websites && npm install --include=dev --no-fund --no-audit
+
+## 构建文档站
+docs: docsinstall
+	cd docs/websites && npm run build
+	@echo "✅ 文档站已构建：docs/websites/.vitepress/dist"
+
+## 文档站开发服务器
+docsdev:
+	cd docs/websites && npm run dev
+
 # ============ 校验 ============
 
-test:
+## 测试前先确保前端依赖已安装：否则 npx 会去远端拉取 vue-tsc，
+## 与项目锁定的 typescript 版本不兼容而报 ERR_PACKAGE_PATH_NOT_EXPORTED。
+test: webinstall
 	cd $(SERVER) && $(GO) test ./... -count=1
-	cd $(WEB) && npx vue-tsc --noEmit
+	cd $(WEB) && npm run typecheck
 	cd $(WEB) && npm test
 	@echo "✅ 测试与类型检查通过（含前端网络判定测试）"
 
@@ -111,11 +135,11 @@ vet:
 fmt:
 	cd $(SERVER) && gofmt -w ./cmd ./internal
 
-check:
+check: webinstall
 	@echo "== gofmt =="; test -z "$$(cd $(SERVER) && gofmt -l ./cmd ./internal)" || { cd $(SERVER) && gofmt -l ./cmd ./internal; exit 1; }
 	@echo "== go vet =="; cd $(SERVER) && $(GO) vet ./...
 	@echo "== go test =="; cd $(SERVER) && $(GO) test ./... -count=1
-	@echo "== 前端类型检查 =="; cd $(WEB) && npx vue-tsc --noEmit
+	@echo "== 前端类型检查 =="; cd $(WEB) && npm run typecheck
 	@echo "== 前端网络判定测试 =="; cd $(WEB) && npm test
 	@echo "✅ 全部检查通过"
 
