@@ -69,19 +69,44 @@ const problems = []
 const { spawn } = await import('node:child_process')
 const procs = []
 function start(cmd, args, env = {}) {
-  const p = spawn(cmd, args, { stdio: 'ignore', env: { ...process.env, ...env } })
+  // detached 让子进程自成进程组：这里用 npx 启 vite，vite 是 npx 的孙进程，
+  // 直接 kill(npx) 只会杀掉 npx，vite 会被 init 收养并一直占着端口
+  // （本脚本确实漏过这种孤儿进程）。按进程组整组杀才能清干净。
+  const p = spawn(cmd, args, {
+    stdio: 'ignore',
+    detached: true,
+    env: { ...process.env, ...env }
+  })
   procs.push(p)
   return p
 }
+
 function stopAll() {
   for (const p of procs) {
+    if (p.exitCode !== null || p.signalCode !== null) continue
     try {
-      p.kill('SIGTERM')
+      // 负号 = 杀整个进程组
+      process.kill(-p.pid, 'SIGTERM')
     } catch {
-      /* 已退出 */
+      try {
+        p.kill('SIGTERM')
+      } catch {
+        /* 已退出 */
+      }
     }
   }
 }
+
+// 异常退出（含 Ctrl-C、未捕获异常）时也要清理，否则会留下占端口的孤儿进程。
+process.on('SIGINT', () => {
+  stopAll()
+  process.exit(130)
+})
+process.on('uncaughtException', (e) => {
+  console.error('未捕获异常:', e)
+  stopAll()
+  process.exit(1)
+})
 
 async function waitFor(url, timeoutMs = 40000) {
   const deadline = Date.now() + timeoutMs
