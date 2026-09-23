@@ -16,6 +16,25 @@
 
 ## Log
 
+- **2026-09-23 P13 仓库改名为 LanDrive**
+  仓库由 `Sakana-1314/lan-drive` 重命名为 **`Sakana-1314/LanDrive`**。
+  因为 **GitHub Pages 路径区分大小写**，站点 base 与线上地址必须与仓库名完全一致，
+  否则静态资源全部 404。同步了全部大小写敏感引用：
+  - `docs/websites/.vitepress/config.ts`：`base` 改为 `/LanDrive/` + socialLinks
+  - `.github/workflows/website.yml`：站点地址与链接校验前缀
+  - `README.md` 徽章与仓库链接；文档站 `index.md` / `deploy.md` 的链接与
+    `git clone` 目录名（`cd LanDrive`）
+  - `AGENTS.md`：补充「改名必须同步的四处」清单
+
+  **刻意保持小写**（Docker 与 ghcr 不接受大写，已在注释中说明）：
+  ghcr 镜像路径 `ghcr.io/sakana-1314/lan-drive`、compose 的 `name` 与
+  `container_name`、本地镜像 tag。同时更新了本地 git remote。
+
+  验证：新地址 <https://sakana-1314.github.io/LanDrive/> 16 个页面全部 200、
+  资源路径为 `/LanDrive/assets/...`；旧小写地址已 404（符合预期）；
+  ghcr 两个镜像仍可匿名拉取（镜像路径未变）；两个徽章均 passing；
+  分支保护（`测试通过`，strict）、仓库变量 `API_HOST`、Pages 配置在改名后均保留。
+
 - **2026-09-23 P12 修复构建/测试报错、精简 README、新增 VitePress 文档站**
   1. **修复构建与测试报错（全新克隆必现）**：`make check` / `make test` 里的 `npx vue-tsc`
      在**未安装依赖**时会去远端拉取任意版本的 vue-tsc，与项目锁定的 typescript 不兼容，
