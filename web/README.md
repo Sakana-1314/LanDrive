@@ -7,25 +7,47 @@
 
 CI 会推送固定 tag 到 ghcr：`ghcr.io/sakana-1314/lan-drive:web`。
 
-后端域名在**构建期**由 `HOST` 注入（CI 取仓库变量 `vars.API_HOST`）；
-镜像同时内置**运行时注入**：启动时若设置了 `LANDRIVE_API_BASE_URL` 就用它生成
-`/config.js` 覆盖，因此同一个镜像也能部署到任意环境，无需重新构建。
+镜像支持两种形态，**同一个镜像靠运行时环境变量切换**，不需要重新构建。
+
+### 形态 A：`/api` 同源反代（推荐）
+
+前端容器内的 nginx 把 `/api` 转发到后端容器。浏览器只访问一个域名：
+
+- **不跨域** → 后端 `LANDRIVE_CORS_ALLOW` 可以留空；
+- 后端地址**不出现在浏览器里**（前端走同源 `/api`）；
+- 后端容器晚启动也没关系：请求时才解析上游，页面照常可用。
 
 ```bash
-# 用镜像里构建期注入的后端域名
-docker run -d -p 80:80 ghcr.io/sakana-1314/lan-drive:web
-
-# 运行时覆盖（无需重新构建镜像）
 docker run -d -p 80:80 \
-  -e LANDRIVE_API_BASE_URL='https://ipip-filrs.local.19890605.xyz/api' \
+  -e LANDRIVE_API_PROXY=lan-drive-api:8080 \
   ghcr.io/sakana-1314/lan-drive:web
 ```
+
+### 形态 B：跨域直连
+
+`/api` 不反代，浏览器直接请求内网 API（需要后端配置 `LANDRIVE_CORS_ALLOW`）。
+
+```bash
+docker run -d -p 80:80 \
+  -e LANDRIVE_API_BASE_URL='https://api.example.com/api' \
+  ghcr.io/sakana-1314/lan-drive:web
+```
+
+不设置 `LANDRIVE_API_BASE_URL` 时回退到构建期 `--build-arg HOST` 注入的域名。
+
+### 环境变量
 
 | 环境变量 | 阶段 | 说明 |
 | --- | --- | --- |
 | `HOST` | 构建期 | 后端域名（仅 origin，不含 `/api`）；留空则走同源 `/api` |
-| `LANDRIVE_API_BASE_URL` | 运行时 | 完整 API 地址（含 `/api`），覆盖构建期值；结尾斜杠自动去掉 |
+| `LANDRIVE_API_PROXY` | 运行时 | **反代目标**（`主机:端口`）。设置后启用形态 A，前端自动改用同源 `/api`。留空则关闭反代 |
+| `LANDRIVE_API_BASE_URL` | 运行时 | 完整 API 地址（含 `/api`）。启用反代时留空即可；关闭反代时用于形态 B |
 | `LANDRIVE_API_PROBE_TIMEOUT` | 运行时 | 连通性探测超时（毫秒），默认 6000 |
+| `LANDRIVE_DNS_RESOLVER` | 运行时 | 反代解析上游用的 DNS；默认自动识别 Docker 内嵌 DNS |
+| `LANDRIVE_API_PROXY_READ_TIMEOUT` | 运行时 | 反代读超时（秒），默认 600；大文件上传/下载慢时可调大 |
+
+> 反代目标的取值会被校验（拒绝路径、空格、非法端口与换行注入）；
+> 非法值会让容器**启动失败并打印原因**，而不是带着坏配置运行。
 
 ## 构建静态产物
 
@@ -45,15 +67,25 @@ HOST=https://ipip-filrs.local.19890605.xyz npm run build
 
 ### API 地址优先级
 
-解析逻辑在 `src/api/index.ts` 的 `resolveApiBaseUrl`：
+解析逻辑在 `src/api/base-url.ts`：
 
-1. 运行时 `window.__LANDRIVE_CONFIG__.apiBaseUrl`（容器注入的 `/config.js`）
+1. 运行时 `window.__LANDRIVE_CONFIG__.apiBaseUrl`（容器注入的 `/config.js`）。
+   启用反代时这里就是 `/api` —— **优先级最高**，确保反代不会因为构建期注入而被绕过。
 2. 构建期 `HOST`（vite `define` 注入的 `__API_HOST__`，拼成 `${HOST}/api`）
-3. 同源 `/api`（适用于用反向代理把 `/api` 转发到内网的场景）
+3. 同源 `/api`
 
-> ⚠️ 后端 `LANDRIVE_CORS_ALLOW` 必须包含本前端被访问的域名，否则浏览器会拦截跨域请求，
-> 用户会看到「无法在此网络下使用，请更换网络再试！」。改完前端地址后需要**重新构建**，
-> 因为 `HOST` 是构建期注入的（容器部署可用运行时 `LANDRIVE_API_BASE_URL` 免重构建覆盖）。
+> ⚠️ 跨域直连（形态 B）时，后端 `LANDRIVE_CORS_ALLOW` 必须包含前端被访问的域名，
+> 否则浏览器会拦截请求，用户会看到「无法在此网络下使用，请更换网络再试！」。
+> 用同源反代（形态 A）则不需要配这一项。
+
+### 反代相关的回归测试
+
+```bash
+npm run test:entrypoint   # 校验入口脚本与生成的 nginx 配置（含注入、端口校验）
+```
+
+装了 nginx 时会额外用 `nginx -t` 验证生成的配置真的能被解析。CI 会执行这一步。
+
 
 ## 开发
 

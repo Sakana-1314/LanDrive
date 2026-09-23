@@ -27,6 +27,13 @@ import {
   NETWORK_UNAVAILABLE_MESSAGE,
   type ApiError
 } from './network'
+import {
+  isCrossOriginBaseUrl,
+  resolveApiBaseUrl,
+  resolveProbeTimeout,
+  type RuntimeConfig
+} from './base-url'
+import { isApiReachable } from './health'
 
 export { NETWORK_UNAVAILABLE_MESSAGE, isNetworkError, networkError }
 export type { ApiError }
@@ -36,38 +43,29 @@ const TOKEN_KEY = 'lanfs-token'
 /** 容器运行时注入的配置（由 web/docker-entrypoint.d 脚本生成 /config.js）。 */
 declare global {
   interface Window {
-    __LANDRIVE_CONFIG__?: { apiBaseUrl?: string; probeTimeout?: number }
+    __LANDRIVE_CONFIG__?: RuntimeConfig
   }
 }
 
-/**
- * 解析 API 基址，优先级：
- *   1. 运行时 /config.js —— 容器启动时注入，同一个镜像可部署到不同内网地址
- *   2. 构建期 HOST —— 后端域名（vite define 注入的 __API_HOST__，仅 origin，不含 /api）
- *   3. 同源 /api —— 适用于用反向代理把 /api 转发到内网的部署方式
- */
-function resolveApiBaseUrl(): string {
-  const runtime = typeof window !== 'undefined' ? window.__LANDRIVE_CONFIG__?.apiBaseUrl : undefined
-  if (runtime && runtime.trim()) return runtime.trim().replace(/\/+$/, '')
-
-  // __API_HOST__ 由 vite.config.ts 从构建期环境变量 HOST 注入。
-  if (__API_HOST__) return `${__API_HOST__}/api`
-
-  return '/api'
+/** 读取容器启动时注入的运行时配置。 */
+function runtimeConfig(): RuntimeConfig {
+  return (typeof window !== 'undefined' ? window.__LANDRIVE_CONFIG__ : undefined) ?? {}
 }
 
-/** API 基址。 */
-export const API_BASE_URL: string = resolveApiBaseUrl()
+/**
+ * API 基址。解析优先级见 base-url.ts：
+ * 运行时 /config.js → 构建期 HOST（__API_HOST__）→ 同源 /api。
+ *
+ * 前端镜像内的 nginx 可通过 LANDRIVE_API_PROXY 把同源 /api 反代到后端容器，
+ * 此时运行时会注入 apiBaseUrl="/api"，浏览器不再跨域直连内网。
+ */
+export const API_BASE_URL: string = resolveApiBaseUrl(runtimeConfig().apiBaseUrl, __API_HOST__)
 
 /** 连通性探测超时（毫秒）。 */
-const PROBE_TIMEOUT = Number(
-  (typeof window !== 'undefined' ? window.__LANDRIVE_CONFIG__?.probeTimeout : undefined) ||
-    __API_PROBE_TIMEOUT__ ||
-    6000
-)
+const PROBE_TIMEOUT = resolveProbeTimeout(runtimeConfig().probeTimeout, __API_PROBE_TIMEOUT__)
 
 /** 是否配置了跨域的内网 API（公网部署形态）。 */
-export const IS_CROSS_ORIGIN = /^https?:\/\//i.test(API_BASE_URL)
+export const IS_CROSS_ORIGIN = isCrossOriginBaseUrl(API_BASE_URL)
 
 export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) || ''
@@ -165,12 +163,29 @@ export function errMsg(e: unknown): string {
  */
 export async function probeHealth(): Promise<boolean> {
   try {
-    await axios.get(`${API_BASE_URL}/health`, { timeout: PROBE_TIMEOUT })
-    return true
+    const res = await axios.get(`${API_BASE_URL}/health`, { timeout: PROBE_TIMEOUT })
+    // 同源反代未配置时，nginx 的 SPA 回退会返回 200 + HTML 首页。
+    // 仅凭状态码会误判为"已连通"，因此这里以响应体形状为准。
+    return isApiReachable({
+      status: res.status,
+      contentType: res.headers?.['content-type'] as string | undefined,
+      data: res.data
+    })
   } catch (e) {
-    const err = e as { response?: { status?: number }; code?: string; message?: string }
-    // 有响应 = 请求到达了服务器，网络是通的（哪怕状态码不是 200）。
-    if (err?.response) return true
+    const err = e as {
+      response?: { status?: number; data?: unknown; headers?: Record<string, string> }
+      code?: string
+      message?: string
+    }
+    // 有响应说明请求到达了服务器，但只有拿到本系统 API 的 JSON 才算连通：
+    // 502/504（反代上游不可达）或 404 兜底页都说明接口其实不可用。
+    if (err?.response) {
+      return isApiReachable({
+        status: err.response.status,
+        contentType: err.response.headers?.['content-type'],
+        data: err.response.data
+      })
+    }
     return !looksLikeNetworkFailure(err)
   }
 }
