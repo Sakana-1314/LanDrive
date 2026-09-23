@@ -1,7 +1,7 @@
 name: 构建并发布文档站
 
 # 在 main 上构建 docs/websites 的 VitePress 站点，推送到 gh-pages 分支，由 GitHub Pages 发布。
-# 站点地址：https://sakana-1314.github.io/lan-drive/
+# 站点地址：https://sakana-1314.github.io/LanDrive/
 #
 # PR 上也构建，但只在 push 到 main / 手动触发时才发布，避免把未审核的文档推上线。
 on:
@@ -25,7 +25,7 @@ concurrency:
 
 env:
   # 构建到工作区之外，再以全新历史提交，避免把源码树带进 gh-pages。
-  # 注意：站点 base 必须与仓库路径大小写一致（config.ts 里为 /lan-drive/）。
+  # 注意：站点 base 必须与仓库路径大小写一致（config.ts 里为 /LanDrive/）。
   SITE_OUT_DIR: ${{ github.workspace }}/.site-dist
 
 jobs:
@@ -69,10 +69,10 @@ jobs:
                   return True
               if url.startswith('/'):
                   rel = url.lstrip('/')
-                  # 站点部署在 /lan-drive/ 下，绝对路径带该前缀
-                  # （GitHub Pages 路径区分大小写，与 config.ts 的 base 保持一致）
-                  if rel.startswith('lan-drive/'):
-                      rel = rel[len('lan-drive/'):]
+                  # 站点部署在 /LanDrive/ 下，绝对路径带该前缀
+                  # （GitHub Pages 路径区分大小写，必须与 config.ts 的 base 一致）
+                  if rel.startswith('LanDrive/'):
+                      rel = rel[len('LanDrive/'):]
               else:
                   rel = posixpath.normpath(posixpath.join(posixpath.dirname(page), url))
               if rel in ('', '.'):

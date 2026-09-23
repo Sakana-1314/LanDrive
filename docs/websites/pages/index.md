@@ -15,7 +15,7 @@ hero:
       link: /guide/deploy
     - theme: alt
       text: GitHub
-      link: https://github.com/Sakana-1314/lan-drive
+      link: https://github.com/Sakana-1314/LanDrive
 
 features:
   - title: 一人一目录
