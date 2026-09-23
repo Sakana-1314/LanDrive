@@ -165,7 +165,7 @@ func seedAdmin(ctx context.Context, st *store.Store, disk *storage.Storage, cfg 
 	if err := st.CreateUser(ctx, u); err != nil {
 		return fmt.Errorf("创建初始管理员失败: %w", err)
 	}
-	dirRel, err := disk.EnsureUserDir(u.ID)
+	dirRel, err := disk.EnsureUserDir(u.EmployeeNo)
 	if err != nil {
 		return fmt.Errorf("创建初始管理员目录失败: %w", err)
 	}

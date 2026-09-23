@@ -148,18 +148,16 @@ async function onReset() {
 
 const showDelete = ref(false)
 const deleteTarget = ref<User | null>(null)
-const deletePurge = ref(false)
 
 function openDelete(row: User) {
   deleteTarget.value = row
-  deletePurge.value = false
   showDelete.value = true
 }
 
 async function onDelete() {
   if (!deleteTarget.value) return
   try {
-    await adminDeleteUser(deleteTarget.value.id, deletePurge.value)
+    await adminDeleteUser(deleteTarget.value.id)
     message.success('账号已删除')
     showDelete.value = false
     load()
@@ -321,7 +319,7 @@ onMounted(load)
     <n-modal v-model:show="showCreate" preset="card" title="新建账号" :style="{ width: isMobile ? '92vw' : '460px' }">
       <n-form ref="createRef" label-placement="left" label-width="80">
         <n-form-item label="工号">
-          <n-input v-model:value="createForm.employee_no" placeholder="登录用，创建后不可修改" />
+          <n-input v-model:value="createForm.employee_no" placeholder="登录用；也是文件目录名，创建后不可修改" />
         </n-form-item>
         <n-form-item label="姓名">
           <n-input v-model:value="createForm.name" placeholder="用于展示，允许重名" />
@@ -414,15 +412,9 @@ onMounted(load)
           即将删除账号 <b>{{ deleteTarget?.name }}（{{ deleteTarget?.employee_no }}）</b>。
         </n-text>
         <n-text v-if="deleteTarget && deleteTarget.file_count > 0" type="warning">
-          该账号名下还有 {{ deleteTarget.file_count }} 个文件（{{ formatBytes(deleteTarget.used_bytes) }}）。
+          该账号名下的 {{ deleteTarget.file_count }} 个文件（{{ formatBytes(deleteTarget.used_bytes) }}）
+          会与其目录一并清除，不可恢复。
         </n-text>
-        <n-space v-if="deleteTarget && deleteTarget.file_count > 0" vertical :size="6">
-          <n-switch v-model:value="deletePurge" />
-          <n-text depth="3" style="font-size: 12px">
-            开启「同时彻底删除文件」会永久删除该账号全部文件（磁盘文件与记录一并删除，不可恢复）。
-            不开启则删除会失败，请先转移或删除这些文件。
-          </n-text>
-        </n-space>
       </n-space>
       <template #footer>
         <n-space justify="end">
@@ -431,7 +423,7 @@ onMounted(load)
             <template #trigger>
               <n-button type="error">确认删除</n-button>
             </template>
-            {{ deletePurge ? '将永久删除该账号及其全部文件，确定继续？' : '确定删除该账号？' }}
+            将删除该账号及其全部文件，确定继续？
           </n-popconfirm>
         </n-space>
       </template>

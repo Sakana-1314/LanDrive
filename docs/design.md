@@ -53,7 +53,9 @@ CORS 拦截）时，必须提示固定文案
 | 统计、存储一致性扫描 | ❌ | ✅ |
 
 - 登录凭据：**工号 + 密码**；`name` 仅用于展示，允许重名，不参与登录。
-- 每个用户拥有独立目录 `users/<id>`，该相对路径显式记录在 `users.dir_rel`。
+- 每个用户拥有独立目录 `users/<工号>`（**工号是账号的不可变标识**，因为它就是目录名），该相对路径显式记录在 `users.dir_rel`。
+  建账号前会检查该目录是否已被占用并拒绝（409）：**存量数据的目录是早期的 `users/<id>`**，
+  因此 `1`、`5` 这类纯数字工号会与旧目录同名，两个账号共用一个磁盘目录、互相看到对方文件。
 - 属主校验在 handler 层完成：`file.owner_id == currentUser.id`。管理员走独立的 `/api/admin/*` 路由组。
 
 ---
@@ -62,7 +64,7 @@ CORS 拦截）时，必须提示固定文案
 
 ```
 <DATA_DIR>/
-├── users/<user_id>/<file_id><ext>        每个用户目录；文件名 = 文件表主键 + 规范化扩展名
+├── users/<工号>/<file_id><ext>           每个用户目录（目录名即工号）；文件名 = 文件表主键 + 规范化扩展名
 └── tmp/chunks/<upload_id>/<idx>.part     分片上传的临时分片
 ```
 
@@ -278,10 +280,10 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/admin/users` | `q`（工号或姓名）、`page`、`page_size` → `Paged<User>` |
-| POST | `/api/admin/users` | `{employee_no, name, role, password}` → `User`；同时创建 `users/<id>` 目录 |
+| POST | `/api/admin/users` | `{employee_no, name, role, password}` → `User`；同时创建 `users/<工号>` 目录。工号只允许字母、数字、`_` `-` `.` |
 | PATCH | `/api/admin/users/:id` | `{name?, role?, enabled?}` → `User`；工号不可改 |
 | POST | `/api/admin/users/:id/password` | `{new_password}` → `{ok: true}` |
-| DELETE | `/api/admin/users/:id` | 有文件时 409（附 `file_count`）；`?purge_files=1` 先彻底删除其文件再删账号 |
+| DELETE | `/api/admin/users/:id` | 先软删该账号全部文件 → 物理清除其文件与磁盘目录 → 再删账号；不能删自己与最后一个管理员 |
 | GET | `/api/admin/settings` | `Settings` |
 | PUT | `/api/admin/settings` | 部分字段更新 → `Settings`（校验 + 刷新缓存） |
 | GET | `/api/admin/files` | `status=active\|trashed\|all`、`owner_id`、`q`、`page`、`page_size` → `Paged<FileItem>` |

@@ -120,26 +120,40 @@ const PinToggle = defineComponent({
   }
 })
 
-// 「全部文件」是父级 tab，展开后按用户列出子 tab —— 想找谁的文件直接点，
-// 不必先进入列表再用筛选器找。置顶的用户排在前面（顺序由服务端给）。
+// 「全部文件」是父级 tab：它自身就是"看所有人的文件"，展开后按人列出子 tab ——
+// 想找谁的文件直接点，不必先进入列表再筛选。
+//
+// 两个取舍：
+//   - 不再单独放一个「全部人员」子项：父级已经是这个入口，重复一项只是多一次点击；
+//   - 名下没有文件的账号不列出（列出也只会点进空列表），
+//     因此一个人都没有文件时父级退化成普通链接，不显示可展开的空子菜单。
 const menuOptions = computed<MenuOption[]>(() => {
-  const children: MenuOption[] = [
-    {
-      label: () => h(RouterLink, { to: '/files' }, { default: () => '全部人员' }),
-      key: '/files',
-      icon: renderIcon(PersonCircleOutline)
-    },
-    ...ownersState.items.map((o) => ({
-      // label 里直接带文件数与占用：省掉一行说明，也让"谁的文件多"一眼可见
-      label: () =>
-        h(RouterLink, { to: `/files?owner=${o.user_id}` }, {
-          default: () => `${o.name} · ${o.file_count}`
-        }),
-      key: `/files?owner=${o.user_id}`,
-      // 图钉即置顶开关：功能显而易见，不需要额外文案
-      extra: () => h(PinToggle, { owner: o })
-    }))
-  ]
+  const withFiles = ownersState.items.filter((o) => o.file_count > 0)
+  const children: MenuOption[] = withFiles.map((o) => ({
+    // label 里直接带文件数：省掉一行说明，也让"谁的文件多"一眼可见
+    label: () =>
+      h(RouterLink, { to: `/files?owner=${o.user_id}` }, {
+        default: () => `${o.name} · ${o.file_count}`
+      }),
+    key: `/files?owner=${o.user_id}`,
+    // 图钉即置顶开关：功能显而易见，不需要额外文案
+    extra: () => h(PinToggle, { owner: o })
+  }))
+
+  const allFilesLink = () =>
+    h(
+      RouterLink,
+      {
+        to: '/files',
+        class: ['all-files-link', { 'is-current': route.path === '/files' && !route.query.owner }],
+        // 父级同时要"可点进去看全部"和"可展开"：n-menu 默认把父级的点击
+        // 当成展开/收起，于是点它永远回不到"全部文件"。
+        // 这里让 label 只负责导航（拦住冒泡，避免又被当成展开）；
+        // 展开/收起交给右侧的箭头（n-menu 自己渲染）。
+        onClick: (e: MouseEvent) => e.stopPropagation()
+      },
+      { default: () => '全部文件' }
+    )
 
   const opts: MenuOption[] = [
     {
@@ -147,12 +161,20 @@ const menuOptions = computed<MenuOption[]>(() => {
       key: '/files/mine',
       icon: renderIcon(DocumentTextOutline)
     },
-    {
-      label: '全部文件',
-      key: 'files-group',
-      icon: renderIcon(FolderOpenOutline),
-      children
-    }
+    children.length
+      ? {
+          // 有子项时才可展开；父级本身也能点，用来查看所有人的文件
+          label: allFilesLink,
+          key: 'files-group',
+          icon: renderIcon(FolderOpenOutline),
+          children
+        }
+      : {
+          // 没有任何人上传过文件：退化成普通链接，避免展开出空菜单
+          label: allFilesLink,
+          key: '/files',
+          icon: renderIcon(FolderOpenOutline)
+        }
   ]
   if (isAdmin()) {
     opts.push(
@@ -188,7 +210,10 @@ const activeKey = computed(() => {
   if (route.path.startsWith('/admin/')) return route.path
   if (route.path === '/files') {
     const owner = route.query.owner
-    return owner ? `/files?owner=${owner}` : '/files'
+    if (owner) return `/files?owner=${owner}`
+    // 有子项时父级的 key 是 files-group（父级本身就是"看所有人的文件"），
+    // 没有子项时父级退化成普通项、key 为 /files。
+    return ownersState.items.some((o) => o.file_count > 0) ? 'files-group' : '/files'
   }
   return route.path
 })

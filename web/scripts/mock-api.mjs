@@ -12,7 +12,9 @@ const PORT = Number(process.argv[2] || 18081)
 const USERS = [
   { id: 1, employee_no: '1001', name: '张伟', role: 'admin', enabled: true, dir_rel: 'users/1', file_count: 4, used_bytes: 12345678, last_login_at: '2026-09-23T02:25:00Z', created_at: '2026-01-05T02:00:00Z' },
   { id: 2, employee_no: '1002', name: '李静', role: 'user', enabled: true, dir_rel: 'users/2', file_count: 4, used_bytes: 8765432, last_login_at: null, created_at: '2026-01-06T02:00:00Z', pinned: true },
-  { id: 3, employee_no: '1003', name: '王强', role: 'user', enabled: false, dir_rel: 'users/3', file_count: 4, used_bytes: 2345678, last_login_at: null, created_at: '2026-01-07T02:00:00Z' }
+  { id: 3, employee_no: '1003', name: '王强', role: 'user', enabled: false, dir_rel: 'users/3', file_count: 4, used_bytes: 2345678, last_login_at: null, created_at: '2026-01-07T02:00:00Z' },
+  // 一个文件都没有的账号：不应出现在「全部文件」的子 tab 里
+  { id: 4, employee_no: '1004', name: '赵六', role: 'user', enabled: true, dir_rel: 'users/1004', file_count: 0, used_bytes: 0, last_login_at: null, created_at: '2026-01-08T02:00:00Z' }
 
 ]
 

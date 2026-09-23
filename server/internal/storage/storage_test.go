@@ -47,26 +47,51 @@ func TestSafeRelRejectsDangerousPaths(t *testing.T) {
 	}
 }
 
+// TestUserDirName 覆盖「工号当路径段」的校验。
+//
+// 工号会直接拼进磁盘路径，所以这里必须比 handler 的宽松校验更严：
+// 一旦放过 ".." 或含分隔符的工号，就会写到数据根目录之外。
+func TestUserDirName(t *testing.T) {
+	ok := []string{"1001", "admin", "user_01", "A-9", "a.b", "60017212"}
+	for _, in := range ok {
+		if _, err := UserDirName(in); err != nil {
+			t.Fatalf("UserDirName(%q) 应通过: %v", in, err)
+		}
+	}
+	bad := []string{"", "  ", ".", "..", "a/b", `a\\b`, "../etc", "a b", "工号", "a:b", "a*b"}
+	for _, in := range bad {
+		if got, err := UserDirName(in); err == nil {
+			t.Fatalf("UserDirName(%q) 应被拒绝，实际通过为 %q", in, got)
+		}
+	}
+	// 含空格的工号尤其危险：handler 目前已拒绝，但这里是最后一道关。
+	if _, err := UserDirName("100 1"); err == nil {
+		t.Fatalf("含空格的工号应被拒绝")
+	}
+}
+
 func TestFileRelAndChunkRel(t *testing.T) {
-	if got := FileRel(12, 34, ".PDF"); got != "users/12/34.pdf" {
+	// 目录就是工号：FileRel 接目录相对路径而不是 owner id，
+	// 这样存量数据（早期 users/<id>）无需迁移也能继续写自己的目录。
+	if got := FileRel("users/1001", 34, ".PDF"); got != "users/1001/34.pdf" {
 		t.Fatalf("FileRel = %q", got)
 	}
 	// 无扩展名
-	if got := FileRel(1, 2, ""); got != "users/1/2" {
+	if got := FileRel("users/1001", 2, ""); got != "users/1001/2" {
 		t.Fatalf("FileRel 无扩展名 = %q", got)
 	}
 	// 非法字符被过滤
-	if got := FileRel(1, 2, ".p<n>g"); got != "users/1/2.png" {
+	if got := FileRel("users/1001", 2, ".p<n>g"); got != "users/1001/2.png" {
 		t.Fatalf("FileRel 过滤非法字符 = %q", got)
 	}
 	if got := ChunkRel("abc", 7); got != "tmp/chunks/abc/7.part" {
 		t.Fatalf("ChunkRel = %q", got)
 	}
-	if got := UserDirRel(42); got != "users/42" {
+	if got := UserDirRel("1001"); got != "users/1001" {
 		t.Fatalf("UserDirRel = %q", got)
 	}
 	// 生成的路径必须能通过 SafeRel 校验。
-	for _, p := range []string{FileRel(12, 34, ".pdf"), ChunkRel("abc", 7), UserDirRel(42)} {
+	for _, p := range []string{FileRel("users/1001", 34, ".pdf"), ChunkRel("abc", 7), UserDirRel("1001")} {
 		if _, err := SafeRel(p); err != nil {
 			t.Fatalf("生成路径 %q 未通过 SafeRel: %v", p, err)
 		}
@@ -179,14 +204,14 @@ func TestStorageWriteReadRemove(t *testing.T) {
 		t.Fatalf("数据根目录应为绝对路径: %q", st.Root())
 	}
 
-	dir, err := st.EnsureUserDir(7)
+	dir, err := st.EnsureUserDir("1001")
 	if err != nil {
 		t.Fatalf("EnsureUserDir: %v", err)
 	}
-	if dir != "users/7" {
+	if dir != "users/1001" {
 		t.Fatalf("EnsureUserDir = %q", dir)
 	}
-	if _, err := os.Stat(filepath.Join(root, "users", "7")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "users", "1001")); err != nil {
 		t.Fatalf("用户目录未创建: %v", err)
 	}
 	// tmp/chunks 也应已初始化。
@@ -274,7 +299,7 @@ func TestMergeToProducesOrderedFileAndHash(t *testing.T) {
 		rels = append(rels, rel)
 	}
 
-	final := FileRel(5, 100, ".bin")
+	final := FileRel("users/5", 100, ".bin")
 	size, sum, err := st.MergeTo(final, rels)
 	if err != nil {
 		t.Fatalf("MergeTo: %v", err)
@@ -301,7 +326,7 @@ func TestMergeToProducesOrderedFileAndHash(t *testing.T) {
 func TestMergeToMissingChunkFailsCleanly(t *testing.T) {
 	root := t.TempDir()
 	st, _ := New(root)
-	final := FileRel(1, 1, ".bin")
+	final := FileRel("users/1", 1, ".bin")
 	if _, _, err := st.MergeTo(final, []string{ChunkRel("nope", 0)}); err == nil {
 		t.Fatalf("分片缺失时应返回错误")
 	}
@@ -314,7 +339,7 @@ func TestMergeToMissingChunkFailsCleanly(t *testing.T) {
 func TestPruneEmptyDirs(t *testing.T) {
 	root := t.TempDir()
 	st, _ := New(root)
-	if _, err := st.EnsureUserDir(9); err != nil {
+	if _, err := st.EnsureUserDir("9"); err != nil {
 		t.Fatalf("EnsureUserDir: %v", err)
 	}
 	if err := st.PruneEmptyDirs("users/9"); err != nil {
@@ -328,10 +353,10 @@ func TestPruneEmptyDirs(t *testing.T) {
 		t.Fatalf("数据根目录不应被删除: %v", err)
 	}
 	// 非空目录不应被删除。
-	if _, err := st.EnsureUserDir(10); err != nil {
+	if _, err := st.EnsureUserDir("10"); err != nil {
 		t.Fatalf("EnsureUserDir: %v", err)
 	}
-	rel := FileRel(10, 1, ".txt")
+	rel := FileRel("users/10", 1, ".txt")
 	if _, err := st.WriteChunk(rel, strings.NewReader("x"), 100); err != nil {
 		t.Fatalf("WriteChunk: %v", err)
 	}
@@ -402,7 +427,7 @@ func TestWalkFilesAndDirSize(t *testing.T) {
 	root := t.TempDir()
 	st, _ := New(root)
 	for i := 0; i < 3; i++ {
-		rel := FileRel(3, int64(i), ".txt")
+		rel := FileRel("users/3", int64(i), ".txt")
 		if _, err := st.WriteChunk(rel, strings.NewReader("abcde"), 100); err != nil {
 			t.Fatalf("WriteChunk: %v", err)
 		}
