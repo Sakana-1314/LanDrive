@@ -108,43 +108,32 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
 
 <template>
   <div class="preview-page">
-    <n-card :bordered="false" size="small" style="border-radius: 8px; margin-bottom: 12px">
-      <n-space justify="space-between" align="center">
-        <n-space align="center" :size="10">
-          <n-button quaternary circle @click="goBack">
-            <template #icon>
-              <n-icon><arrow-back-outline /></n-icon>
-            </template>
-          </n-button>
-          <n-text strong style="font-size: 16px">{{ info?.name || '文件预览' }}</n-text>
-          <n-tag v-if="info" size="small" :type="extTagType(info.ext)" :bordered="false">
-            {{ extLabel(info.ext) }}
-          </n-tag>
-          <n-text v-if="info" depth="3" style="font-size: 12px">
-            {{ formatBytes(info.size_bytes) }}
-          </n-text>
-        </n-space>
-        <n-space :size="8">
-          <n-tag v-if="info?.kind === 'docx' || info?.kind === 'xlsx' || info?.kind === 'pptx'" size="small" type="success" :bordered="false">
-            纯前端渲染
-          </n-tag>
-          <n-button size="small" type="primary" @click="onDownload">
-            <template #icon>
-              <n-icon><download-outline /></n-icon>
-            </template>
-            下载
-          </n-button>
-        </n-space>
-      </n-space>
+    <n-card class="card-surface preview-bar" :bordered="false">
+      <div class="bar-left">
+        <n-button quaternary circle aria-label="返回" @click="goBack">
+          <template #icon>
+            <n-icon><arrow-back-outline /></n-icon>
+          </template>
+        </n-button>
+        <span class="bar-name" :title="info?.name">{{ info?.name || '文件预览' }}</span>
+        <n-tag v-if="info" size="small" :type="extTagType(info.ext)" :bordered="false">
+          {{ extLabel(info.ext) }}
+        </n-tag>
+        <n-tag v-if="info" size="small" :bordered="false">{{ formatBytes(info.size_bytes) }}</n-tag>
+      </div>
+      <n-button size="small" type="primary" @click="onDownload">
+        <template #icon>
+          <n-icon><download-outline /></n-icon>
+        </template>
+        下载
+      </n-button>
     </n-card>
 
     <n-spin v-if="loading" size="large" style="display: block; text-align: center; padding: 80px 0">
       <template #description>
         <n-space vertical align="center">
           <n-text>正在加载文件内容…</n-text>
-          <n-text v-if="slowHint" depth="3" style="font-size: 12px">
-            大文件加载较慢，请稍候；也可以直接下载后本地查看
-          </n-text>
+          <n-text v-if="slowHint" depth="3">文件较大，加载中…</n-text>
         </n-space>
       </template>
     </n-spin>
@@ -161,10 +150,7 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
     <n-card v-else-if="info && (info.kind === 'unsupported' || info.kind === 'legacy-office')" :bordered="false" style="border-radius: 8px">
       <n-empty :description="info.note || '该格式不支持在线预览'" style="padding: 40px 0">
         <template #extra>
-          <n-space vertical align="center">
-            <n-text depth="3" style="font-size: 12px">可以下载到本地后用对应的软件打开。</n-text>
-            <n-button type="primary" @click="onDownload">下载文件</n-button>
-          </n-space>
+          <n-button type="primary" @click="onDownload">下载文件</n-button>
         </template>
       </n-empty>
     </n-card>
@@ -209,6 +195,42 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
 </template>
 
 <style scoped>
+.preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.bar-left {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.bar-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-strong);
+  font-size: 15px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 移动端：文件名独占一行，操作键降级到下一行 */
+@media (max-width: 768px) {
+  .preview-bar {
+    flex-wrap: wrap;
+  }
+
+  .bar-left {
+    flex: 1 1 100%;
+  }
+}
+
 .preview-page {
   height: 100vh;
   padding: 12px;

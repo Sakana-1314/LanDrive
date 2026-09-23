@@ -9,10 +9,12 @@
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
     "test": "node --experimental-strip-types src/api/network.spec.ts && node --experimental-strip-types src/api/base-url.spec.ts && node --experimental-strip-types src/api/health.spec.ts",
-    "test:entrypoint": "sh scripts/test-entrypoint.sh && sh scripts/check-no-internal-host.sh"
+    "test:entrypoint": "sh scripts/test-entrypoint.sh && sh scripts/check-no-internal-host.sh",
+    "test:responsive": "node scripts/check-responsive.mjs"
   },
   "dependencies": {
     "@vicons/ionicons5": "^0.13.0",
+    "@vueuse/core": "^13.9.0",
     "axios": "^1.8.0",
     "docx-preview": "^0.4.1",
     "exceljs": "^4.4.0",
@@ -22,10 +24,10 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@types/node": "^22.10.0",
     "@vitejs/plugin-vue": "^5.2.0",
     "typescript": "~5.7.0",
     "vite": "^6.0.0",
-    "vue-tsc": "^2.2.0",
-    "@types/node": "^22.10.0"
+    "vue-tsc": "^2.2.0"
   }
 }
