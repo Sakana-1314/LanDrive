@@ -24,28 +24,6 @@ const (
 	UploadAborted   = "aborted"
 )
 
-// 审计动作。
-const (
-	ActLogin          = "login"
-	ActLoginFailed    = "login_failed"
-	ActUpload         = "upload"
-	ActRename         = "rename"
-	ActDelete         = "delete"
-	ActRestore        = "restore"
-	ActPurge          = "purge"
-	ActDownload       = "download"
-	ActUserCreate     = "user_create"
-	ActUserUpdate     = "user_update"
-	ActUserDelete     = "user_delete"
-	ActPasswordChange = "password_change"
-	ActPasswordReset  = "password_reset"
-	ActSettingsUpdate = "settings_update"
-	ActMaintainExpire = "maintain_expire"
-	ActMaintainPurge  = "maintain_purge"
-	ActMaintainOrphan = "maintain_orphan"
-	ActStorageScan    = "storage_scan"
-)
-
 // User 账号。dir_rel 是该用户目录相对数据根目录的路径（如 users/12）。
 type User struct {
 	ID          int64      `json:"id"`
@@ -136,19 +114,6 @@ type Chunk struct {
 	RelPath   string `json:"rel_path"`
 }
 
-// LogEntry 一条审计日志。
-type LogEntry struct {
-	ID         int64     `json:"id"`
-	UserID     *int64    `json:"user_id"`
-	EmployeeNo string    `json:"employee_no"`
-	Action     string    `json:"action"`
-	TargetType string    `json:"target_type"`
-	TargetID   string    `json:"target_id"`
-	Detail     string    `json:"detail"`
-	IP         string    `json:"ip"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
 // Stats 管理端统计。
 type Stats struct {
 	Users             int64 `json:"users"`
@@ -169,4 +134,7 @@ type OwnerAggregate struct {
 	DirRel     string `json:"dir_rel"`
 	FileCount  int64  `json:"file_count"`
 	UsedBytes  int64  `json:"used_bytes"`
+	// Pinned 表示"当前登录用户"是否置顶了这个人的目录。
+	// 置顶是每人各自一份（user_pins），不是全局标记。
+	Pinned bool `json:"pinned"`
 }

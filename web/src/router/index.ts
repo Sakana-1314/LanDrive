@@ -26,12 +26,9 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/FilesView.vue'),
         meta: { title: '我的文件', scope: 'mine' }
       },
-      {
-        path: 'upload',
-        name: 'upload',
-        component: () => import('@/views/UploadView.vue'),
-        meta: { title: '上传文件' }
-      },
+      // 上传不再单独成页：拖进「我的文件」即可。
+      // 保留重定向，避免旧的收藏/书签 404。
+      { path: 'upload', redirect: '/files/mine' },
       {
         path: 'profile',
         name: 'profile',
@@ -40,14 +37,16 @@ const routes: RouteRecordRaw[] = [
       },
       {
         path: 'admin',
-        redirect: '/admin/dashboard'
+        redirect: '/admin/workbench'
       },
       {
-        path: 'admin/dashboard',
-        name: 'admin-dashboard',
-        component: () => import('@/views/admin/DashboardView.vue'),
-        meta: { title: '统计看板', admin: true }
+        path: 'admin/workbench',
+        name: 'admin-workbench',
+        component: () => import('@/views/admin/WorkbenchView.vue'),
+        meta: { title: '工作台', admin: true }
       },
+      // 旧路径保留重定向，避免书签失效。
+      { path: 'admin/dashboard', redirect: '/admin/workbench' },
       {
         path: 'admin/users',
         name: 'admin-users',
@@ -61,16 +60,10 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '文件与回收站', admin: true }
       },
       {
-        path: 'admin/logs',
-        name: 'admin-logs',
-        component: () => import('@/views/admin/LogsView.vue'),
-        meta: { title: '审计日志', admin: true }
-      },
-      {
         path: 'admin/settings',
         name: 'admin-settings',
         component: () => import('@/views/admin/SettingsView.vue'),
-        meta: { title: '系统配置', admin: true }
+        meta: { title: '系统管理', admin: true }
       }
     ]
   },

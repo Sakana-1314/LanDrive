@@ -91,7 +91,7 @@ func run() error {
 	filesSvc := files.New(st, disk, set)
 	// 把 files 的展示字段逻辑注入上传服务，避免包循环依赖。
 	uploadsSvc := upload.New(st, disk, set, filesSvc.Decorate)
-	maintSvc := maintain.New(st, disk, set, cfg.LogKeepDays)
+	maintSvc := maintain.New(st, disk, set)
 
 	h := handler.New(handler.Deps{
 		Store:    st,
@@ -101,7 +101,6 @@ func run() error {
 		Uploads:  uploadsSvc,
 		Maintain: maintSvc,
 		Tokens:   tokens,
-		LogKeep:  cfg.LogKeepDays,
 	})
 
 	// 维护任务调度。
@@ -174,10 +173,6 @@ func seedAdmin(ctx context.Context, st *store.Store, disk *storage.Storage, cfg 
 		return fmt.Errorf("初始化初始管理员目录失败: %w", err)
 	}
 	slog.Info("已创建初始管理员", "employee_no", u.EmployeeNo, "name", u.Name, "dir", dirRel)
-	_ = st.InsertLog(ctx, &model.LogEntry{
-		UserID: &u.ID, EmployeeNo: u.EmployeeNo, Action: model.ActUserCreate,
-		TargetType: "user", TargetID: u.EmployeeNo, Detail: "首次启动自动创建管理员账号",
-	})
 	return nil
 }
 

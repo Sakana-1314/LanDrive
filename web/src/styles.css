@@ -50,6 +50,14 @@
   --page-glow: radial-gradient(circle at 100% 0%, rgb(63 99 216 / 7%), transparent 32%);
   --gradient-brand: linear-gradient(145deg, #2947a6, #5579e7);
 
+  /* 间距阶梯：此前各页面用 16px / 18px / 12px 这类散值拼凑，
+     导致同一层级的间距不一致，且多处相邻块间距为 0（内容贴在一起）。
+     统一成四档，需要间距时引用变量而不是随手写数字。 */
+  --space-xs: 6px;
+  --space-sm: 10px;
+  --space-md: 16px;
+  --space-lg: 24px;
+
   /* 顶栏与侧栏高度：移动端在媒体查询里收窄，组件统一引用变量 */
   --header-height: 64px;
   --sider-width: 208px;
@@ -132,8 +140,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-sm);
   min-width: 0;
+  /* 标题与下方内容之间必须有间距：默认 0 会让首行紧贴标题 */
+  margin-bottom: var(--space-md);
 }
 
 .section-head__title {
@@ -158,4 +168,28 @@ body {
 .text-muted {
   color: var(--color-text-muted);
   font-size: 13px;
+}
+
+/* ---------- 用户悬浮菜单 ---------- */
+
+/**
+ * 使用量信息块。必须放在全局样式里：n-dropdown 的菜单内容会 teleport 到
+ * body 之外，组件内的 <style scoped> 覆盖不到它。
+ */
+.menu-usage {
+  display: grid;
+  gap: 2px;
+  min-width: 150px;
+  padding: 2px 0;
+}
+
+.menu-usage__name {
+  color: var(--color-text-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.menu-usage__sub {
+  color: var(--color-text-muted);
+  font-size: 12px;
 }

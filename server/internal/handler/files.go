@@ -13,7 +13,6 @@ import (
 	"lan-drive/internal/files"
 	"lan-drive/internal/model"
 	"lan-drive/internal/storage"
-	"lan-drive/internal/store"
 )
 
 // ListFiles 处理 GET /api/files。
@@ -42,13 +41,47 @@ func (h *Handler) ListFiles(c *gin.Context) {
 }
 
 // ListOwners 处理 GET /api/files/owners，返回用户目录树数据。
+// 置顶状态与排序都按"当前登录者"计算。
 func (h *Handler) ListOwners(c *gin.Context) {
-	items, err := h.files.Owners(c.Request.Context())
+	actor := currentUser(c)
+	if actor == nil {
+		fail(c, http.StatusUnauthorized, "请先登录")
+		return
+	}
+	items, err := h.files.Owners(c.Request.Context(), actor.ID)
 	if err != nil {
 		failErr(c, err, "查询用户目录失败")
 		return
 	}
 	ok(c, gin.H{"items": items, "total": len(items)})
+}
+
+// PinOwner 处理 PUT /api/files/owners/:id/pin。
+func (h *Handler) PinOwner(c *gin.Context) {
+	h.setOwnerPin(c, true)
+}
+
+// UnpinOwner 处理 DELETE /api/files/owners/:id/pin。
+func (h *Handler) UnpinOwner(c *gin.Context) {
+	h.setOwnerPin(c, false)
+}
+
+func (h *Handler) setOwnerPin(c *gin.Context, pinned bool) {
+	actor := currentUser(c)
+	if actor == nil {
+		fail(c, http.StatusUnauthorized, "请先登录")
+		return
+	}
+	id, valid := pathInt64(c, "id")
+	if !valid {
+		return
+	}
+	if err := h.files.PinOwner(c.Request.Context(), actor.ID, id, pinned); err != nil {
+		failErr(c, err, "设置置顶失败")
+		return
+	}
+	// 置顶是幂等的：成功即返回 204，前端随后重取 owners 列表。
+	c.Status(http.StatusNoContent)
 }
 
 // GetFile 处理 GET /api/files/:id。
@@ -158,8 +191,6 @@ func (h *Handler) RenameFile(c *gin.Context) {
 		failErr(c, err, "重命名失败")
 		return
 	}
-	h.audit(c, model.ActRename, "file", itoa(f.ID),
-		fmt.Sprintf("重命名为 %s", f.OriginalNam))
 	ok(c, f)
 }
 
@@ -174,8 +205,6 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 		failErr(c, err, "删除失败")
 		return
 	}
-	h.audit(c, model.ActDelete, "file", itoa(f.ID),
-		fmt.Sprintf("删除文件 %s（进入回收站，%d 天后彻底删除）", f.OriginalNam, h.set.Get().TrashDays))
 	ok(c, gin.H{"ok": true, "file": f})
 }
 
@@ -244,7 +273,6 @@ func (h *Handler) serveFile(c *gin.Context, asAttachment bool) {
 	}
 	if asAttachment {
 		// 下载动作记审计日志（预览不记，避免日志被刷爆）。
-		h.audit(c, model.ActDownload, "file", itoa(f.ID), "下载文件 "+f.OriginalNam)
 	}
 	// ServeContent 负责 Range / If-Modified-Since / ETag 等语义。
 	http.ServeContent(c.Writer, c.Request, f.OriginalNam, st.ModTime(), fh)
@@ -327,9 +355,6 @@ func (h *Handler) ScanStorage(c *gin.Context) {
 		failErr(c, err, "存储一致性扫描失败")
 		return
 	}
-	h.audit(c, model.ActStorageScan, "storage", "",
-		fmt.Sprintf("一致性扫描：孤儿 %d，缺失 %d，非法路径 %d",
-			len(rep.Orphans), len(rep.Missing), len(rep.Invalid)))
 	ok(c, rep)
 }
 
@@ -372,8 +397,6 @@ func (h *Handler) RestoreFile(c *gin.Context) {
 		failErr(c, err, "恢复失败")
 		return
 	}
-	h.audit(c, model.ActRestore, "file", itoa(f.ID),
-		fmt.Sprintf("恢复文件 %s（新到期时间 %s）", f.OriginalNam, f.ExpiresAt.Format(time.RFC3339)))
 	ok(c, f)
 }
 
@@ -383,60 +406,11 @@ func (h *Handler) PurgeFile(c *gin.Context) {
 	if !valid {
 		return
 	}
-	f, err := h.files.Purge(c.Request.Context(), id, currentUser(c))
-	if err != nil {
+	if _, err := h.files.Purge(c.Request.Context(), id, currentUser(c)); err != nil {
 		failErr(c, err, "彻底删除失败")
 		return
 	}
-	h.audit(c, model.ActPurge, "file", itoa(f.ID), "彻底删除文件 "+f.OriginalNam)
 	ok(c, gin.H{"ok": true})
-}
-
-// ListLogs 处理 GET /api/admin/logs。
-func (h *Handler) ListLogs(c *gin.Context) {
-	page, size := normalizePage(queryInt(c, "page", 1), queryInt(c, "page_size", 30))
-	q := store.LogQuery{
-		Action:   strings.TrimSpace(c.Query("action")),
-		Keyword:  c.Query("q"),
-		UserID:   queryInt64(c, "user_id", 0),
-		Page:     page,
-		PageSize: size,
-	}
-	// days 预设：1 / 7 / 30；也可用 from/to 显式指定（RFC3339）。
-	if days := queryInt(c, "days", 0); days > 0 {
-		from := time.Now().UTC().AddDate(0, 0, -days)
-		q.From = &from
-	} else {
-		if v := strings.TrimSpace(c.Query("from")); v != "" {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				q.From = &t
-			}
-		}
-		if v := strings.TrimSpace(c.Query("to")); v != "" {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				q.To = &t
-			}
-		}
-	}
-	items, total, err := h.store.ListLogs(c.Request.Context(), q)
-	if err != nil {
-		failErr(c, err, "查询审计日志失败")
-		return
-	}
-	ok(c, paged(items, total, page, size))
-}
-
-// LogActions 处理 GET /api/admin/logs/actions（筛选下拉）。
-func (h *Handler) LogActions(c *gin.Context) {
-	items := []string{
-		model.ActLogin, model.ActLoginFailed, model.ActUpload, model.ActRename,
-		model.ActDelete, model.ActRestore, model.ActPurge, model.ActDownload,
-		model.ActUserCreate, model.ActUserUpdate, model.ActUserDelete,
-		model.ActPasswordChange, model.ActPasswordReset, model.ActSettingsUpdate,
-		model.ActMaintainExpire, model.ActMaintainPurge, model.ActMaintainOrphan,
-		model.ActStorageScan,
-	}
-	ok(c, gin.H{"items": items})
 }
 
 // Health 处理 GET /api/health（无需登录，供容器健康检查与运维探活）。

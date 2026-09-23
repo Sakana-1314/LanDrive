@@ -148,7 +148,7 @@ async function onSubmit() {
 }
 
 .info-grid {
-  margin-top: 16px;
+  margin-top: var(--space-lg);
 }
 
 /* 修改密码：桌面三列、移动单列 */
@@ -156,7 +156,7 @@ async function onSubmit() {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 0 16px;
-  margin-top: 12px;
+  margin-top: var(--space-lg);
 }
 
 .pwd-form :deep(.n-form-item) {

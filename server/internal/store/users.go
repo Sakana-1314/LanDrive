@@ -229,16 +229,22 @@ func (s *Store) TouchLastLogin(ctx context.Context, id int64) error {
 
 // ListOwners 按用户目录聚合 active 文件（用于前端的用户目录树）。
 // 没有文件的账号也会返回，便于展示空目录。
-func (s *Store) ListOwners(ctx context.Context) ([]model.OwnerAggregate, error) {
+//
+// viewerID 用于标记"当前登录用户是否置顶了此人"，并据此排序：
+// 置顶项排在前面，其余按 id 升序。排序放在服务端做，前端只负责渲染，
+// 避免各端各自排序导致顺序不一致。
+func (s *Store) ListOwners(ctx context.Context, viewerID int64) ([]model.OwnerAggregate, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT u.id, u.employee_no, u.name, u.dir_rel,
-			COALESCE(f.cnt, 0), COALESCE(f.bytes, 0)
+			COALESCE(f.cnt, 0), COALESCE(f.bytes, 0),
+			(p.owner_user_id IS NOT NULL) AS pinned
 		 FROM users u
 		 LEFT JOIN (
 			SELECT owner_id, COUNT(*) AS cnt, COALESCE(SUM(size_bytes), 0) AS bytes
 			FROM files WHERE status = ? GROUP BY owner_id
 		 ) f ON f.owner_id = u.id
-		 ORDER BY u.id ASC`, model.StatusActive)
+		 LEFT JOIN user_pins p ON p.target_user_id = u.id AND p.owner_user_id = ?
+		 ORDER BY pinned DESC, u.id ASC`, model.StatusActive, viewerID)
 	if err != nil {
 		return nil, err
 	}
@@ -247,10 +253,12 @@ func (s *Store) ListOwners(ctx context.Context) ([]model.OwnerAggregate, error) 
 	out := []model.OwnerAggregate{}
 	for rows.Next() {
 		var a model.OwnerAggregate
+		var pinned int
 		if err := rows.Scan(&a.UserID, &a.EmployeeNo, &a.Name, &a.DirRel,
-			&a.FileCount, &a.UsedBytes); err != nil {
+			&a.FileCount, &a.UsedBytes, &pinned); err != nil {
 			return nil, err
 		}
+		a.Pinned = pinned == 1
 		out = append(out, a)
 	}
 	return out, rows.Err()

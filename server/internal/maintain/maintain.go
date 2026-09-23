@@ -1,5 +1,5 @@
 // Package maintain 实现生命周期维护任务：到期标记、物理清理、僵尸上传会话、
-// 审计日志裁剪与孤儿文件归档。
+// 孤儿文件归档。
 //
 // 所有任务都先尝试获取数据库命名锁（GET_LOCK），因此多副本部署时同一时刻
 // 只有一个实例真正执行，其余实例直接跳过。
@@ -7,14 +7,12 @@ package maintain
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"path"
 	"strings"
 	"time"
 
-	"lan-drive/internal/model"
 	"lan-drive/internal/settings"
 	"lan-drive/internal/storage"
 	"lan-drive/internal/store"
@@ -34,22 +32,17 @@ type Service struct {
 	store     *store.Store
 	st        *storage.Storage
 	set       *settings.Service
-	logKeep   int
 	batchSize int
 }
 
-// New 构造维护服务。logKeepDays 为审计日志保留天数。
-func New(s *store.Store, st *storage.Storage, set *settings.Service, logKeepDays int) *Service {
-	if logKeepDays < 1 {
-		logKeepDays = 90
-	}
-	return &Service{store: s, st: st, set: set, logKeep: logKeepDays, batchSize: defaultBatchSize}
+// New 构造维护服务。
+func New(s *store.Store, st *storage.Storage, set *settings.Service) *Service {
+	return &Service{store: s, st: st, set: set, batchSize: defaultBatchSize}
 }
 
-// RunDaily 执行每日任务：日志裁剪 + 孤儿扫描。
+// RunDaily 执行每日任务：孤儿扫描。
 func (s *Service) RunDaily(ctx context.Context) {
 	s.withLock(ctx, "daily", func(ctx context.Context) {
-		s.PruneLogs(ctx)
 		s.ScanOrphans(ctx)
 	})
 }
@@ -65,14 +58,6 @@ func (s *Service) RunExpire(ctx context.Context) int {
 		if err != nil {
 			slog.Error("到期标记失败", "error", err)
 			return
-		}
-		for _, f := range expired {
-			s.log(ctx, &model.LogEntry{
-				Action:     model.ActMaintainExpire,
-				TargetType: "file",
-				TargetID:   itoa(f.ID),
-				Detail:     "到期自动删除：" + f.OriginalNam + "（属主 " + f.OwnerEmployeeNo + "）",
-			})
 		}
 		n = len(expired)
 		if n > 0 {
@@ -105,12 +90,6 @@ func (s *Service) RunPurge(ctx context.Context) int {
 				continue
 			}
 			s.pruneUserDir(f.RelPath)
-			s.log(ctx, &model.LogEntry{
-				Action:     model.ActMaintainPurge,
-				TargetType: "file",
-				TargetID:   itoa(f.ID),
-				Detail:     "回收站到期彻底删除：" + f.OriginalNam,
-			})
 			n++
 		}
 		if n > 0 {
@@ -159,20 +138,6 @@ func (s *Service) RunCleanStaleUploads(ctx context.Context) int {
 			slog.Info("上传会话已清理", "count", n)
 		}
 	})
-	return n
-}
-
-// PruneLogs 删除超过保留期的审计日志。
-func (s *Service) PruneLogs(ctx context.Context) int64 {
-	before := time.Now().UTC().AddDate(0, 0, -s.logKeep)
-	n, err := s.store.PurgeLogs(ctx, before)
-	if err != nil {
-		slog.Error("裁剪审计日志失败", "error", err)
-		return 0
-	}
-	if n > 0 {
-		slog.Info("审计日志已裁剪", "count", n, "keep_days", s.logKeep)
-	}
 	return n
 }
 
@@ -266,11 +231,6 @@ func (s *Service) ScanOrphans(ctx context.Context) int {
 		}
 	}
 	if moved > 0 {
-		s.log(ctx, &model.LogEntry{
-			Action:     model.ActMaintainOrphan,
-			TargetType: "storage",
-			Detail:     "孤儿文件已归档到 " + orphanDirRel,
-		})
 		slog.Info("孤儿文件已归档", "count", moved)
 	}
 	// 清理过期的归档与合并残留。
@@ -326,13 +286,6 @@ func (s *Service) withLock(ctx context.Context, task string, fn func(context.Con
 	}
 	defer release()
 	fn(ctx)
-}
-
-// log 写审计日志（失败只记录日志，不影响任务）。
-func (s *Service) log(ctx context.Context, e *model.LogEntry) {
-	if err := s.store.InsertLog(ctx, e); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Warn("写审计日志失败", "action", e.Action, "error", err)
-	}
 }
 
 func itoa(n int64) string {
