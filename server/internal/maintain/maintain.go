@@ -256,8 +256,15 @@ func (s *Service) cleanupArchive(ctx context.Context) {
 }
 
 // CleanupUserDir 删除用户目录（删除账号时调用）。
-func (s *Service) CleanupUserDir(userID int64) error {
-	return s.st.RemoveAll(storage.UserDirRel(userID))
+//
+// 接相对路径而不是 userID：存量数据的目录可能是早期的 users/<id>，
+// 直接用数据库里记录的值才能又准又安全地删对地方。
+func (s *Service) CleanupUserDir(dirRel string) error {
+	if dirRel == "" {
+		// 早期数据可能没写 dir_rel；此时按工号推算无处可依，直接跳过。
+		return nil
+	}
+	return s.st.RemoveAll(dirRel)
 }
 
 // pruneUserDir 删除文件后清理其所在的空用户目录。

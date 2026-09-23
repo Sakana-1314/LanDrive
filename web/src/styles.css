@@ -193,3 +193,14 @@ body {
   color: var(--color-text-muted);
   font-size: 12px;
 }
+
+/**
+ * 侧栏「全部文件」父级自身被选中时的样子。
+ * 必须放全局样式：该节点由 MainLayout 的渲染函数产出、但挂在 n-menu 内部，
+ * 组件的 scoped 属性覆盖不到它（同 PinToggle 的说明）。
+ * n-menu 只认子项 key，父级 key 不在 value 里，所以选中态得自己给。
+ */
+.all-files-link.is-current {
+  color: var(--color-primary);
+  font-weight: 650;
+}

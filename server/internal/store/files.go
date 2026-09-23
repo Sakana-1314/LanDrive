@@ -259,6 +259,22 @@ func (s *Store) MarkTrashed(ctx context.Context, id int64, deletedAt, purgeAt ti
 	return nil
 }
 
+// SoftDeleteAllByOwner 把某账号名下所有 active 文件一次性软删除（进回收站），
+// 返回受影响的条数。已在回收站里的不动（避免刷新 purge_at 延长保留期）。
+//
+// purge_at 传 NULL：这些文件马上就要随账号一起被物理清除，
+// 不需要再走"回收站保留 N 天"的流程。
+func (s *Store) SoftDeleteAllByOwner(ctx context.Context, ownerID int64, deletedAt time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE files SET status = ?, deleted_at = ?, purge_at = NULL
+		 WHERE owner_id = ? AND status = ?`,
+		model.StatusTrashed, deletedAt.UTC(), ownerID, model.StatusActive)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // RestoreFile 从回收站恢复，重算到期时间。
 func (s *Store) RestoreFile(ctx context.Context, id int64, expiresAt time.Time) error {
 	res, err := s.db.ExecContext(ctx,

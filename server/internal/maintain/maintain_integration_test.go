@@ -78,7 +78,7 @@ func newFixture(t *testing.T) *fixture {
 	if err := st.CreateUser(ctx, admin); err != nil {
 		t.Fatalf("创建管理员失败: %v", err)
 	}
-	dirRel, _ := disk.EnsureUserDir(admin.ID)
+	dirRel, _ := disk.EnsureUserDir(admin.EmployeeNo)
 	if err := st.SetUserDirRel(ctx, admin.ID, dirRel); err != nil {
 		t.Fatalf("设置目录失败: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestFullUploadPipeline(t *testing.T) {
 	}
 
 	// rel_path 必须落在属主目录下，且与主键 + 扩展名一致
-	wantRel := storage.FileRel(f.admin.ID, file.ID, ".txt")
+	wantRel := storage.FileRel(f.admin.DirRel, file.ID, ".txt")
 	if file.RelPath != wantRel {
 		t.Fatalf("rel_path = %q，期望 %q", file.RelPath, wantRel)
 	}
@@ -449,7 +449,7 @@ func TestOrphanScanArchivesUnownedFiles(t *testing.T) {
 	ctx := context.Background()
 
 	// 造一个数据库里没有记录的「孤儿文件」
-	orphanRel := storage.FileRel(f.admin.ID, 99999, ".txt")
+	orphanRel := storage.FileRel(f.admin.DirRel, 99999, ".txt")
 	if _, err := f.disk.WriteChunk(orphanRel, strings.NewReader("孤儿"), 100); err != nil {
 		t.Fatalf("WriteChunk: %v", err)
 	}

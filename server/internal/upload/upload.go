@@ -125,7 +125,12 @@ func (s *Service) Init(ctx context.Context, in InitInput) (*model.UploadSession,
 		SHA256:       sha,
 	}
 	if sess.DirRel == "" {
-		sess.DirRel = storage.UserDirRel(in.Owner.ID)
+		// 兜底：正常情况下 dir_rel 来自 users 表（创建账号时就写好），
+		// 只有早期未写入 dir_rel 的账号才会走到这里，按工号推算。
+		sess.DirRel = storage.UserDirRel(in.Owner.EmployeeNo)
+		if _, err := storage.SafeRel(sess.DirRel); err != nil {
+			return nil, fmt.Errorf("该账号的工号不能用作目录名: %w", err)
+		}
 	}
 	if err := s.store.CreateUploadSession(ctx, sess); err != nil {
 		return nil, err
@@ -275,14 +280,17 @@ func (s *Service) Complete(ctx context.Context, id string, actor *model.User) (*
 		SizeBytes:   sess.SizeBytes,
 		Mime:        storage.MIMEFor(sess.Ext, sess.OriginalName),
 		SHA256:      "",
-		RelPath:     fmt.Sprintf("users/%d/pending-%s%s", sess.OwnerID, sess.ID, sess.Ext),
-		Status:      model.StatusActive,
-		ExpiresAt:   time.Now().UTC().Truncate(time.Second).AddDate(0, 0, cfg.RetentionDays),
+		// 占位路径放在会话目录下，合并成功后会改成 <目录>/<fileID><ext>。
+		RelPath:   fmt.Sprintf("%s/pending-%s%s", sess.DirRel, sess.ID, sess.Ext),
+		Status:    model.StatusActive,
+		ExpiresAt: time.Now().UTC().Truncate(time.Second).AddDate(0, 0, cfg.RetentionDays),
 	}
 	if err := s.store.CreateFile(ctx, placeholder); err != nil {
 		return nil, err
 	}
-	finalRel := storage.FileRel(sess.OwnerID, placeholder.ID, sess.Ext)
+	// 用会话里记录的目录，而不是按 owner id 重算：
+	// 这样存量数据（早期按 users/<id> 落盘的账号）不会把新文件写错地方。
+	finalRel := storage.FileRel(sess.DirRel, placeholder.ID, sess.Ext)
 
 	// 合并写盘。
 	size, sum, err := s.st.MergeTo(finalRel, chunkRels)

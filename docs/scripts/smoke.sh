@@ -409,8 +409,9 @@ fi
 
 # ---------- 12. 清理测试数据 ----------
 info "12. 清理测试数据"
-CODE="$(httpcode DELETE "/api/admin/users/$TEST_ID?purge_files=1" "$ADMIN_TOKEN" '')"
-[ "$CODE" = "200" ] && ok "测试用户及其文件已删除" || bad "删除测试用户失败（$CODE）"
+# 删除账号：服务端会先软删其文件再删账号并清目录，无需 purge 参数。
+CODE="$(httpcode DELETE "/api/admin/users/$TEST_ID" "$ADMIN_TOKEN" '')"
+[ "$CODE" = "200" ] && ok "测试用户及其文件已删除（自动清理）" || bad "删除测试用户失败（$CODE）"
 
 # 删除自己应被拒绝。
 ME="$(api GET /api/auth/me "$ADMIN_TOKEN" '')"

@@ -376,8 +376,15 @@ export async function adminResetPassword(id: number, newPassword: string): Promi
   await http.post(`/admin/users/${id}/password`, { new_password: newPassword })
 }
 
-export async function adminDeleteUser(id: number, purgeFiles: boolean): Promise<void> {
-  await http.delete(`/admin/users/${id}`, { params: purgeFiles ? { purge_files: 1 } : {} })
+/**
+ * 删除账号。
+ *
+ * 服务端语义：先把该账号名下文件软删除（进回收站）视为已清理，
+ * 再删除账号，并清掉其磁盘目录 —— 目录按工号命名，残留内容会被
+ * 将来同工号的新账号"继承"。因此这里不接受"是否彻底删除"的选项。
+ */
+export async function adminDeleteUser(id: number): Promise<void> {
+  await http.delete(`/admin/users/${id}`)
 }
 
 export async function adminSettings(): Promise<Settings> {
