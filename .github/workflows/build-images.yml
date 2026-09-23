@@ -154,6 +154,15 @@ jobs:
         id: stamp
         run: echo "value=$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
 
+      # 公开镜像不得含真实内网域名：镜像推到公开 ghcr 后任何人都能解包读取，
+      # 曾因构建期 --build-arg HOST=<内网域名> 把域名烘进前端产物。
+      #
+      # 只扫**会进入产物**的构建期输入（.env*、vite 配置、源码里的默认值），
+      # 不扫文档与测试：测试里用 192.168.x 造跨域样例是正常的，扫它们只会误报。
+      - name: 校验构建期输入不含真实内网域名
+        working-directory: web
+        run: sh scripts/check-no-internal-host.sh
+
       - name: 构建并推送 web 镜像（固定 tag）
         uses: docker/build-push-action@v6
         with:
@@ -161,11 +170,16 @@ jobs:
           file: ./web/Dockerfile
           platforms: linux/amd64
           push: true
-          # HOST 为后端域名（仓库变量 vars.API_HOST，可为空）。
-          # 留空时镜像仍可用：部署时用 LANDRIVE_API_BASE_URL 环境变量在启动时注入。
-          # 注意：工作流文件公开可见，绝不在此硬编码内网域名。
+          # ★ 故意不传 HOST，保持为空：前端走**同源 /api**，与网页端自己的域名一致。
+          #   - 浏览器只访问一个域名，不跨域、不需要 CORS；
+          #   - 镜像与部署环境解耦，换地址只需改运行时环境变量；
+          #   - 镜像推送到公开的 ghcr，若在构建期烘焙后端域名，
+          #     任何人都能从镜像里读出来（曾因此把内网域名泄进公开镜像）。
+          #   部署时二选一：
+          #     LANDRIVE_API_PROXY=api:8080           同源反代（推荐）
+          #     LANDRIVE_API_BASE_URL=https://.../api  跨域直连
+          #   自建镜像确实需要固化地址时，用 --build-arg HOST=<域名>（仅 origin）。
           build-args: |
-            HOST=${{ vars.API_HOST }}
             VITE_API_PROBE_TIMEOUT=6000
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE }}:web

@@ -6,7 +6,7 @@ import vue from '@vitejs/plugin-vue'
 //
 // 后端域名由**构建期**环境变量 `HOST` 注入（与同组织其它前端项目保持一致），
 // 取值优先级：进程环境变量 HOST > .env(.production/.development) 中的 HOST。
-//   例：HOST=https://files.example.com npm run build
+//   例：HOST=https://api.example.com npm run build
 //       docker build --build-arg HOST=https://xxx -f web/Dockerfile web
 // 未设置时 `__API_HOST__` 为空串，前端走同源 `/api`（适用于反向代理部署）。
 //

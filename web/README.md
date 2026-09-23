@@ -33,13 +33,14 @@ docker run -d -p 80:80 \
   ghcr.io/sakana-1314/lan-drive:web
 ```
 
-不设置 `LANDRIVE_API_BASE_URL` 时回退到构建期 `--build-arg HOST` 注入的域名。
+不设置 `LANDRIVE_API_BASE_URL` 时回退到构建期 `--build-arg HOST` 注入的域名
+（**官方发布的镜像不传 `HOST`**，因此回退到同源 `/api`）。
 
 ### 环境变量
 
 | 环境变量 | 阶段 | 说明 |
 | --- | --- | --- |
-| `HOST` | 构建期 | 后端域名（仅 origin，不含 `/api`）；留空则走同源 `/api` |
+| `HOST` | 构建期 | 后端域名（仅 origin，不含 `/api`）；留空则走同源 `/api`。官方镜像**刻意留空** |
 | `LANDRIVE_API_PROXY` | 运行时 | **反代目标**（`主机:端口`）。设置后启用形态 A，前端自动改用同源 `/api`。留空则关闭反代 |
 | `LANDRIVE_API_BASE_URL` | 运行时 | 完整 API 地址（含 `/api`）。启用反代时留空即可；关闭反代时用于形态 B |
 | `LANDRIVE_API_PROBE_TIMEOUT` | 运行时 | 连通性探测超时（毫秒），默认 6000 |
@@ -54,12 +55,12 @@ docker run -d -p 80:80 \
 ```bash
 cp .env.example .env.production
 # 编辑 .env.production，填后端域名（仅 origin，不带 /api）：
-#   HOST=https://files.example.com
+#   HOST=https://api.example.com
 npm install
 npm run build        # 产物在 dist/
 
 # 或直接在命令前传，不改文件：
-HOST=https://files.example.com npm run build
+HOST=https://api.example.com npm run build
 ```
 
 把 `dist/` 的内容放到公网静态托管即可（Nginx / OSS / CDN 均可）。
@@ -77,6 +78,13 @@ HOST=https://files.example.com npm run build
 > ⚠️ 跨域直连（形态 B）时，后端 `LANDRIVE_CORS_ALLOW` 必须包含前端被访问的域名，
 > 否则浏览器会拦截请求，用户会看到「无法在此网络下使用，请更换网络再试！」。
 > 用同源反代（形态 A）则不需要配这一项。
+
+::: warning 不要在镜像里烘焙后端域名
+镜像会推到**公开**的 ghcr，任何人都能 `docker save` 解包读取前端产物。
+一旦在构建期把真实域名写进产物，内网地址就公开了（本项目曾因此泄露过一次）。
+官方镜像因此不传 `HOST`，地址一律在**运行时**用环境变量注入。
+`web/scripts/check-no-internal-host.sh` 会在构建前扫描并拦住这种事。
+:::
 
 ### 反代相关的回归测试
 
