@@ -43,13 +43,17 @@ func newFixture(t *testing.T) *fixture {
 	dsn = withDBTag(dsn, "maintain")
 	ctx := context.Background()
 
-	st, err := store.Open(ctx, dsn, true)
+	// 与 store 包测试保持一致：默认自动建库；置 LANDRIVE_TEST_AUTO_CREATE_DB=false
+	// 可改用已存在的库。部分 MySQL 兼容实现经 CREATE DATABASE 建库时外键元数据
+	// 不完整（会报 missing index for foreign key），这类环境必须走这个开关。
+	autoCreate := strings.ToLower(strings.TrimSpace(os.Getenv("LANDRIVE_TEST_AUTO_CREATE_DB"))) != "false"
+	st, err := store.Open(ctx, dsn, autoCreate)
 	if err != nil {
 		t.Fatalf("连接测试数据库失败: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	for _, table := range []string{"op_logs", "upload_chunks", "upload_sessions", "files", "users", "settings"} {
+	for _, table := range []string{"user_pins", "upload_chunks", "upload_sessions", "files", "users", "settings"} {
 		if _, err := st.DB().ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("清理表 %s 失败: %v", table, err)
 		}
@@ -82,7 +86,7 @@ func newFixture(t *testing.T) *fixture {
 
 	return &fixture{
 		st: st, disk: disk, set: set,
-		svc:   New(st, disk, set, 90),
+		svc:   New(st, disk, set),
 		up:    upload.New(st, disk, set, nil),
 		admin: admin,
 	}
@@ -507,39 +511,6 @@ func TestUploadedChunksNotReportedAsOrphans(t *testing.T) {
 	}
 }
 
-// TestLogsPrunedByRetention 验证审计日志按保留期裁剪。
-func TestLogsPrunedByRetention(t *testing.T) {
-	f := newFixture(t)
-	ctx := context.Background()
-
-	uid := f.admin.ID
-	if err := f.st.InsertLog(ctx, &model.LogEntry{
-		UserID: &uid, EmployeeNo: "admin", Action: model.ActLogin, Detail: "旧日志",
-	}); err != nil {
-		t.Fatalf("InsertLog: %v", err)
-	}
-	if err := f.st.InsertLog(ctx, &model.LogEntry{
-		UserID: &uid, EmployeeNo: "admin", Action: model.ActLogin, Detail: "新日志",
-	}); err != nil {
-		t.Fatalf("InsertLog: %v", err)
-	}
-	// 把一条日志改到 100 天前
-	old := time.Now().UTC().AddDate(0, 0, -100)
-	if _, err := f.st.DB().ExecContext(ctx,
-		`UPDATE op_logs SET created_at = ? WHERE detail = ?`, old, "旧日志"); err != nil {
-		t.Fatalf("准备数据失败: %v", err)
-	}
-
-	// 保留 90 天 → 应删除 1 条
-	if n := f.svc.PruneLogs(ctx); n != 1 {
-		t.Fatalf("应裁剪 1 条日志，实际 %d", n)
-	}
-	if _, total, _ := f.st.ListLogs(ctx, store.LogQuery{Page: 1, PageSize: 10}); total != 1 {
-		t.Fatalf("裁剪后应剩 1 条日志，实际 %d", total)
-	}
-}
-
-// TestMaintenanceLockIsExclusive 验证多副本部署时清理任务只会跑一份。
 func TestMaintenanceLockIsExclusive(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

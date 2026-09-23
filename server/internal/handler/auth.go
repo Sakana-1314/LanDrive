@@ -34,7 +34,6 @@ func (h *Handler) Login(c *gin.Context) {
 	ip := clientIP(c)
 	limitKey := ip + "|" + req.EmployeeNo
 	if !h.limiter.Allow(limitKey) {
-		h.audit(c, model.ActLoginFailed, "user", req.EmployeeNo, "登录失败次数过多，已限流")
 		fail(c, http.StatusTooManyRequests, auth.ErrTooMany.Error())
 		return
 	}
@@ -42,14 +41,12 @@ func (h *Handler) Login(c *gin.Context) {
 	u, err := h.store.GetUserByEmployeeNo(c.Request.Context(), req.EmployeeNo)
 	if err != nil || u == nil || !auth.CheckPassword(u.Password, req.Password) {
 		h.limiter.Fail(limitKey)
-		h.audit(c, model.ActLoginFailed, "user", req.EmployeeNo, "工号或密码错误")
 		// 统一提示，不暴露工号是否存在。
 		fail(c, http.StatusUnauthorized, auth.ErrBadCredentials.Error())
 		return
 	}
 	if !u.Enabled {
 		h.limiter.Fail(limitKey)
-		h.audit(c, model.ActLoginFailed, "user", req.EmployeeNo, "账号已停用")
 		fail(c, http.StatusForbidden, auth.ErrUserDisabled.Error())
 		return
 	}
@@ -64,15 +61,35 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	h.audit(c, model.ActLogin, "user", u.EmployeeNo, "登录成功")
 	// 注意：u 已放入用户缓存，这里必须外发副本，绝不能原地清空密码。
-	ok(c, gin.H{"token": token, "expires_at": exp, "user": u.Public()})
+	ok(c, gin.H{"token": token, "expires_at": exp, "user": h.publicWithUsage(c, u)})
 }
 
 // Me 处理 GET /api/auth/me，返回当前用户与生效配置。
 func (h *Handler) Me(c *gin.Context) {
 	u := currentUser(c)
-	ok(c, gin.H{"user": u.Public(), "settings": h.set.Get()})
+	ok(c, gin.H{"user": h.publicWithUsage(c, u), "settings": h.set.Get()})
+}
+
+// publicWithUsage 返回可外发的用户副本，并补齐"我的文件数 / 占用"。
+//
+// 为什么需要：users 表里没有这两个聚合列，GetUserByID 取到的用户 FileCount 与
+// UsedBytes 恒为结构体零值，直接外发会让顶栏永远显示"0 个文件 · 0 B"。
+// 必须在**副本**上赋值 —— u 同时被 15 秒 TTL 的用户缓存持有，
+// 原地修改会污染缓存，让其它请求读到串味的数据。
+func (h *Handler) publicWithUsage(c *gin.Context, u *model.User) *model.User {
+	out := u.Public()
+	if out == nil {
+		return nil
+	}
+	// 统计失败不该让 /me 整体失败：退化为 0 也比登录态报错强。
+	if n, err := h.store.CountFilesByOwner(c.Request.Context(), u.ID); err == nil {
+		out.FileCount = n
+	}
+	if b, err := h.store.UsedBytesByOwner(c.Request.Context(), u.ID); err == nil {
+		out.UsedBytes = b
+	}
+	return out
 }
 
 // ChangePassword 处理 POST /api/auth/password。
@@ -86,7 +103,6 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 		return
 	}
 	if !auth.CheckPassword(u.Password, req.OldPassword) {
-		h.audit(c, model.ActPasswordChange, "user", u.EmployeeNo, "修改密码失败：原密码错误")
 		fail(c, http.StatusBadRequest, "原密码不正确")
 		return
 	}
@@ -105,7 +121,6 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 		return
 	}
 	h.users.Invalidate(u.ID)
-	h.audit(c, model.ActPasswordChange, "user", u.EmployeeNo, "修改本人密码成功")
 	ok(c, gin.H{"ok": true})
 }
 
@@ -191,8 +206,6 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		return
 	}
 
-	h.audit(c, model.ActUserCreate, "user", u.EmployeeNo,
-		fmt.Sprintf("创建账号 %s（%s），角色 %s", u.Name, u.EmployeeNo, u.Role))
 	ok(c, u.Public())
 }
 
@@ -266,7 +279,6 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		failErr(c, err, "读取更新后的用户失败")
 		return
 	}
-	h.audit(c, model.ActUserUpdate, "user", updated.EmployeeNo, "更新账号信息")
 	ok(c, updated.Public())
 }
 
@@ -282,8 +294,9 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	target, err := h.store.GetUserByID(c.Request.Context(), id)
-	if err != nil {
+	// 先确认账号存在：UpdateUser 对不存在的 id 也能返回 ErrNotFound，
+	// 但这里给出更贴切的提示，且避免为不存在的账号做无用的哈希计算。
+	if _, err := h.store.GetUserByID(c.Request.Context(), id); err != nil {
 		failErr(c, err, "用户不存在")
 		return
 	}
@@ -298,7 +311,6 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 	}
 	// 使该用户已签发的令牌立即失效。
 	h.users.Invalidate(id)
-	h.audit(c, model.ActPasswordReset, "user", target.EmployeeNo, "管理员重置了该账号密码")
 	ok(c, gin.H{"ok": true})
 }
 
@@ -367,12 +379,8 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	// 账号删除后再删目录，避免遗留空目录。
 	if err := h.maint.CleanupUserDir(id); err != nil {
 		// 目录删除失败不影响账号删除结果，记录日志由孤儿扫描兜底。
-		h.audit(c, model.ActUserDelete, "user", target.EmployeeNo,
-			fmt.Sprintf("账号已删除，但目录清理失败：%v", err))
 	}
 	h.users.Invalidate(id)
-	h.audit(c, model.ActUserDelete, "user", target.EmployeeNo,
-		fmt.Sprintf("删除账号 %s（%s），同时删除文件 %d 个", target.Name, target.EmployeeNo, deleted))
 	ok(c, gin.H{"ok": true, "deleted_files": deleted})
 }
 
@@ -414,10 +422,6 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		failErr(c, err, "更新配置失败")
 		return
 	}
-	h.audit(c, model.ActSettingsUpdate, "settings", "",
-		fmt.Sprintf("更新系统配置：单文件上限 %dMB，允许类型 %s，保留 %d 天，回收站 %d 天，分片 %dMB，上传开关 %v",
-			next.MaxFileSizeMB, describeExt(next.AllowedExtensions), next.RetentionDays,
-			next.TrashDays, next.ChunkSizeMB, next.UploadEnabled))
 	ok(c, next)
 }
 

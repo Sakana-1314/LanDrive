@@ -20,6 +20,9 @@ import (
 // ErrForbidden 表示当前用户无权操作该文件。
 var ErrForbidden = errors.New("无权操作该文件")
 
+// ErrCannotPinSelf 表示试图置顶自己的目录。
+var ErrCannotPinSelf = errors.New("不能置顶自己的目录")
+
 // Service 文件业务服务。
 type Service struct {
 	store *store.Store
@@ -285,8 +288,25 @@ func (s *Service) cleanupEmptyDir(relPath string) {
 }
 
 // Owners 返回用户目录聚合（供前端左侧目录树）。
-func (s *Service) Owners(ctx context.Context) ([]model.OwnerAggregate, error) {
-	return s.store.ListOwners(ctx)
+// viewerID 决定返回结果里的 pinned 标记与置顶排序（每人各有一份置顶）。
+func (s *Service) Owners(ctx context.Context, viewerID int64) ([]model.OwnerAggregate, error) {
+	return s.store.ListOwners(ctx, viewerID)
+}
+
+// PinOwner 置顶 / 取消置顶某人的目录（仅影响 viewerID 自己的视图）。
+func (s *Service) PinOwner(ctx context.Context, viewerID, targetID int64, pinned bool) error {
+	if viewerID == targetID {
+		// 自己的文件在"我的文件"里始终可达，置顶自己没有意义。
+		// 明确报错而不是静默成功，避免前端以为置顶生效却在列表里看不到变化。
+		return ErrCannotPinSelf
+	}
+	if _, err := s.store.GetUserByID(ctx, targetID); err != nil {
+		return err
+	}
+	if pinned {
+		return s.store.PinOwner(ctx, viewerID, targetID)
+	}
+	return s.store.UnpinOwner(ctx, viewerID, targetID)
 }
 
 // normalizePage 规范化分页参数。
