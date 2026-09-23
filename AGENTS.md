@@ -65,8 +65,24 @@
   - 回归测试：`npm run test:entrypoint`（`web/scripts/test-entrypoint.sh`），装了 nginx 时会用 `nginx -t` 校验生成的配置。
 - **上传**：走 `src/utils/upload.ts` 的 `UploadManager`（分片并发、断点续传、重试）；分片大小必须服从服务端 `init` 返回的 `chunk_size`，前端不得自行决定。
 - **预览**：预览库一律 `defineAsyncComponent` + 动态 `import()`，**主包不得引入 docx-preview / exceljs / pptx-preview**；新增预览类型时同步 `previewKind`（server）与预览矩阵表（`docs/design.md`）。
-- **样式**：用 Naive UI 组件与 `n-space`/`n-card` 布局，避免自写大段 CSS；主题令牌集中在 `src/utils/theme.ts`。
+- **样式**：用 Naive UI 组件与 `n-space`/`n-card` 布局，避免自写大段 CSS；设计令牌集中在 `src/styles.css`，Naive UI 的主题覆盖值在 `src/utils/theme.ts`（详见下方 UI 约定）。
 - **代码质量**：`npm run typecheck`（vue-tsc）、`npm test`（网络判定单测）、`npm run build` 全绿。
+- **UI 约定（参照同组织 Electrical-Manager）**：
+  - **设计令牌**集中在 `src/styles.css`（`--color-*` / `--radius-*` / `--shadow-*`），明暗两套只覆盖颜色类令牌。
+    **不要写内联魔法色值**（`#1f6feb`、`#f2f3f5` 之类），用变量。
+  - **明暗外观**在 `src/utils/themeState.ts`（`reactive` 单例，三档 auto/light/dark），
+    Naive UI 覆盖值在 `src/utils/theme.ts` 的 `createThemeOverrides(palette)`；
+    两套是一份结构两个调色板，**不要只改一套**（另一套会掉回内置值）。
+  - **响应式**：`useIsMobile()`（≤768px）判断形态；视图切换优先用 CSS 媒体查询而非 JS 断点（首帧即正确）。
+    桌面表格 / 移动卡片两套视图必须共用同一份操作逻辑（见 `composables/useFileActions.ts`），不要各写一份。
+  - **布局陷阱**（都踩过）：全局 `box-sizing: border-box` 不可去掉；
+    grid 容器与页面根节点用 `grid-template-columns: minmax(0, 1fr)`（默认 `min-width:auto` 会被长内容撑宽、
+    内容被 `n-scrollbar` 裁掉）；全屏页面用 `100dvh` 而不是 `100%`。
+  - **文案**：不要用整段小字解释功能 —— 功能应显而易见（策略值用角标、权限差异用标签、
+    流程用箭头表示）。**异常态例外**：网络不可达等必须说清原因与做法。
+  - **回归测试**：`npm run test:responsive`（真实浏览器 × 5 视口查横向溢出，
+    自带 mock 后端与 dev server）。CI 设 `REQUIRE_PLAYWRIGHT=1`，未装浏览器时**失败而非跳过**
+    —— 否则会出现"什么都没检查却报绿"的假通过（已发生三次）。
 
 ## 6. 部署编排（docker-compose.yml）
 
