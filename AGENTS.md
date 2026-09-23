@@ -55,7 +55,19 @@
 - **样式**：用 Naive UI 组件与 `n-space`/`n-card` 布局，避免自写大段 CSS；主题令牌集中在 `src/utils/theme.ts`。
 - **代码质量**：`npm run typecheck`（vue-tsc）、`npm test`（网络判定单测）、`npm run build` 全绿。
 
-## 6. docs（文档站）
+## 6. 部署编排（docker-compose.yml）
+
+- **只面向 1Panel 场景**：编排文件不创建网络，所有服务加入 1Panel 已有的 `1panel-network`
+  （`networks: 1panel-network: external: true`），以便与面板里安装的其它应用互通。
+- **MySQL 不在编排里**：数据库用 1Panel 应用商店安装或指向已有实例，通过 `.env` 的
+  `LANDRIVE_MYSQL_DSN` 连接。**不要**往 compose 里加 `mysql` 服务或 `mysql-data` 卷。
+- **必填项用 `${VAR:?提示}`**：缺失时 compose 直接报错并给出可操作提示，不允许带空值启动。
+  可选值用 `${VAR:-默认值}`。新增变量必须同步 `.env.example`。
+- **`.env` 不提交**（已在 `.gitignore`）；`.env.example` 只放占位与说明，不得出现真实域名、IP、密码。
+- 改编排后请校验：`docker compose config` 能解析、不含 `mysql` 服务、`1panel-network` 为 external。
+  本地无 docker 时至少确认 YAML 可解析且 `${VAR:?}` 覆盖了必填项。
+
+## 7. docs（文档站）
 
 - **技术栈**：VitePress（源码 `docs/websites/pages/`，构建产物 `docs/websites/.vitepress/dist/`）。
 - **面向使用者**：文档站只讲**怎么部署、怎么用**，不写实现细节（那些放 `docs/design.md`）。语言要口语化、面向非开发同事。
@@ -65,7 +77,7 @@
 - **不要把 `node_modules` / `.vitepress/dist` 提交**（已在 `.gitignore`）。
 - 本地预览：`make docsdev`；构建：`make docs`。注意本仓库开发环境的 `NODE_ENV=production` 会让 npm 跳过 devDependencies，**安装时必须带 `--include=dev`**，否则 VitePress 装不上。
 
-## 7. CI/CD
+## 8. CI/CD
 
 - **`test.yml`（测试）**：push 任意分支与 PR 触发。`detect` 按变更目录过滤（`server/**` / `web/**`）；后端起 MySQL 8.0 service 跑单元 + 集成测试，前端跑 typecheck / 单测 / 构建并校验产物（含固定文案存在性）。汇总 job `测试通过` 是分支保护的必需检查，路径跳过按成功处理。
 - **⚠️ 必需检查工作流禁止在 `on:` 上写 `paths` 过滤**：`测试通过` 是分支保护的必需检查，若在触发层就按路径过滤，只改 `docs/`、`README.md`、`todo.md` 的 PR 不会触发工作流，必需检查永不回报，PR 会永久卡在 `BLOCKED` 无法合并。正确做法是「**总是触发 + 在 job 内按变更目录跳过**」：`on` 不写 `paths`，由 `detect` 判断、子任务 `if` 跳过，汇总 job 始终回报状态。`build-images.yml` 不是必需检查，可以保留路径过滤以省额度。

@@ -23,7 +23,7 @@ CGO_ENABLED := 0
 
 .PHONY: help all server webinstall web webbuild build run webdev test vet fmt check \
         docsinstall docs docsdev \
-        docker pull up up-all up-build down down-all clean clean-data \
+        docker pull up up-build status logs down preflight clean clean-data \
         build-linux-amd64 build-linux-arm64
 
 help:
@@ -43,8 +43,10 @@ help:
 	@echo "    make check        gofmt/vet/test + 前端类型检查"
 	@echo ""
 	@echo "  部署"
-	@echo "    make up           启动内网 API + MySQL（拉取 ghcr 固定 tag 镜像）"
-	@echo "    make up-all       一体化启动（MySQL + API + 前端，单机内网）"
+	@echo "    make up           启动（接入 1panel-network，用 ghcr 固定 tag 镜像）"
+	@echo "    make up-build     从源码构建并启动"
+	@echo "    make status       查看运行状态"
+	@echo "    make logs         跟踪日志"
 	@echo "    make down         停止容器"
 	@echo "    make docker       本地构建镜像（server + web）"
 	@echo "    make pull         拉取 ghcr 上的固定 tag 镜像"
@@ -157,28 +159,38 @@ pull:
 	docker pull ghcr.io/sakana-1314/lan-drive:web
 	@echo "✅ 已拉取 server / web 镜像"
 
-## 启动内网 API + MySQL（使用 ghcr 镜像）
-up:
-	docker compose pull app
+## 前置检查：确认 1panel-network 存在，且 .env 已就绪
+## （MySQL 不随本编排部署，需先在 1Panel 应用商店装好并填 LANDRIVE_MYSQL_DSN）
+preflight:
+	@docker network inspect 1panel-network >/dev/null 2>&1 || { \
+	  echo "❌ 未找到 1panel-network 网络。"; \
+	  echo "   请在 1Panel 中安装任一应用（会自动创建该网络），或手动创建："; \
+	  echo "   docker network create 1panel-network"; exit 1; }
+	@test -f .env || { \
+	  echo "❌ 缺少 .env。请执行：cp .env.example .env 并填写必填项。"; exit 1; }
+	@echo "✅ 前置检查通过（1panel-network 存在，.env 就绪）"
+
+## 启动（使用 ghcr 固定 tag 镜像，加入 1panel-network）
+up: preflight
+	docker compose pull
 	docker compose up -d
-	@echo "✅ 已启动。请确认 LANDRIVE_CORS_ALLOW 已包含前端域名。"
+	@echo "✅ 已启动。请在 1Panel 反向代理中指向 WEB_PORT / API_PORT，"
+	@echo "   并确认 .env 的 LANDRIVE_CORS_ALLOW 与用户实际访问地址一致。"
 
-## 一体化启动（MySQL + API + 前端，适用于前后端同机部署）
-up-all:
-	docker compose -f docker-compose.full.yml pull
-	docker compose -f docker-compose.full.yml up -d
-	@echo "✅ 已启动，浏览器访问 http://<服务器内网IP>/"
-
-## 从源码构建并启动（不使用 ghcr 镜像）
-up-build:
+## 从源码构建并启动（不使用 ghcr 镜像；需先在 docker-compose.yml 里开启 build）
+up-build: preflight
 	docker compose up -d --build
 	@echo "✅ 已从源码构建并启动。"
 
+## 查看运行状态与日志
+status:
+	docker compose ps
+logs:
+	docker compose logs -f --tail=100
+
 down:
 	docker compose down
-
-down-all:
-	docker compose -f docker-compose.full.yml down
+	@echo "已停止（数据卷 file-data 保留；如需一并删除用 docker compose down -v）"
 
 clean:
 	rm -rf $(BIN) $(WEB)/dist $(WEB)/node_modules
