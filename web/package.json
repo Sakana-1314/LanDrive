@@ -8,7 +8,7 @@
     "build": "vite build",
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types src/api/network.spec.ts && node --experimental-strip-types src/api/base-url.spec.ts && node --experimental-strip-types src/api/health.spec.ts",
+    "test": "node --experimental-strip-types src/api/network.spec.ts && node --experimental-strip-types src/api/base-url.spec.ts && node --experimental-strip-types src/api/health.spec.ts && node scripts/check-component-imports.mjs",
     "test:entrypoint": "sh scripts/test-entrypoint.sh && sh scripts/check-no-internal-host.sh",
     "test:responsive": "node scripts/check-responsive.mjs"
   },

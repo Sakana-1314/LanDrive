@@ -6,7 +6,7 @@
 // 只有「网络不可达」这一种情况必须显式说明（否则会被误认为密码错误）。
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NAlert, NButton, NIcon, NInput, useMessage } from 'naive-ui'
+import { NAlert, NButton, NForm, NIcon, NInput, useMessage } from 'naive-ui'
 import {
   CloudOutline,
   LockClosedOutline,
