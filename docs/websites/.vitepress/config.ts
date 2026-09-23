@@ -4,14 +4,14 @@ import { withMermaid } from 'vitepress-plugin-mermaid'
 /**
  * 站点源码在 pages/（srcDir），构建产物在 .vitepress/dist/。
  * base 必须与 GitHub Pages 的仓库路径**大小写完全一致**：
- *   https://sakana-1314.github.io/lan-drive/
+ *   https://sakana-1314.github.io/LanDrive/
  * GitHub Pages 的路径区分大小写，写成小写会导致线上资源全部 404。
  *
  * withMermaid 让 ```mermaid 代码块渲染成图（部署拓扑、文件生命周期都用到）。
  */
 export default withMermaid(
   defineConfig({
-    base: '/lan-drive/',
+    base: '/LanDrive/',
     srcDir: 'pages',
     lang: 'zh-CN',
     title: '局域网文件助手',
@@ -84,7 +84,7 @@ export default withMermaid(
         message: '本站为项目文档',
         copyright: '版权归 Sakana-1314 所有',
       },
-      socialLinks: [{ icon: 'github', link: 'https://github.com/Sakana-1314/lan-drive' }],
+      socialLinks: [{ icon: 'github', link: 'https://github.com/Sakana-1314/LanDrive' }],
     },
   }),
 )

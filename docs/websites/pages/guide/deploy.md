@@ -49,8 +49,8 @@ docker load -i landrive.tar
 ## 第一步：拿到编排文件
 
 ```bash
-git clone https://github.com/Sakana-1314/lan-drive.git
-cd lan-drive
+git clone https://github.com/Sakana-1314/LanDrive.git
+cd LanDrive
 ```
 
 只需要 `docker-compose.yml` 与 `.env.example` 这两个文件，其余都是源码。

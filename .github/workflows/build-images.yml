@@ -30,8 +30,9 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  # ghcr 的镜像路径必须全小写，而 github.repository_owner 保留了原始大小写
-  # （Sakana-1314），因此这里显式写死小写，避免 "repository name must be lowercase"。
+  # ghcr 的镜像路径必须全小写：仓库owner 保留了原始大小写（Sakana-1314），
+  # 且仓库名现为 LanDrive，两者都不能直接用于镜像路径，
+  # 因此这里显式写死小写，避免 "repository name must be lowercase"。
   IMAGE: sakana-1314/lan-drive
 
 jobs:
