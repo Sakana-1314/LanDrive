@@ -16,6 +16,28 @@
 
 ## Log
 
+- **2026-09-23 P15 修复公开镜像泄露内网域名（并改为默认同源 /api）**
+  `build-images.yml` 一直用 `--build-arg HOST=${{ vars.API_HOST }}` 把真实后端域名烘进前端产物，
+  而 web 镜像推到**公开** ghcr，任何人都能解包读取。逐层下载镜像验证后确认泄露：
+  第 10 层 `/usr/share/nginx/html/assets/index-*.js` 中可读到
+  `oe(I().apiBaseUrl,"https://<真实内网域名>`。
+
+  修复：
+  1. 构建**不再传 HOST**，前端走同源 `/api`（与网页端自己的域名一致）——
+     与 P14 的反代设计一致：不跨域、免 CORS，镜像与环境解耦，换地址只改运行时变量。
+  2. 清除仓库内真实域名，示例统一 `example.com`（仓库源码与文档同样公开）。
+  3. 新增 `web/scripts/check-no-internal-host.sh`：扫描会进入产物的构建期输入
+     （`.env*` / `vite.config.ts` / `src`），拦截 private 域与内网网段；
+     **排除测试文件**（`base-url.spec.ts` 里的 `192.168.1.100` 是验证跨域判定的样例，
+     第一版守卫把它误报成泄露 —— 守卫一旦误报就会被绕过）。
+     已接入 `build-images.yml` 构建前校验与 `npm run test:entrypoint`。
+  4. AGENTS.md 改为硬规则：web 镜像不得注入 HOST；仓库内示例一律占位地址。
+
+  验证：守卫对三种注入（src 写内网 IP、.env.production 写真实域名、vite.config.ts 默认值）
+  均能拦截；重建镜像后逐层解包复查，内网域名命中 **0** 个文件，
+  产物注入值为 `apiBaseUrl,""`（回退同源 `/api`）。
+  遗留：仓库变量 `API_HOST` 已无人引用（仍存有真实域名），待确认是否删除。
+
 - **2026-09-23 P14 前端镜像支持 /api 同源反代**
   新增 `LANDRIVE_API_PROXY=主机:端口`：前端容器内的 nginx 把同源 `/api` 转发到后端容器。
   浏览器只访问一个域名 → 不跨域、不需要 CORS，后端地址也不暴露。compose 已默认开启
