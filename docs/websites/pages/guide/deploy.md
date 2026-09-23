@@ -7,6 +7,11 @@
 
 推荐用 **1Panel** 部署：在面板里装好 MySQL，再用一份编排文件把两个容器跑起来。
 
+编排里网页端默认把 `/api` **反代**给服务端容器，因此：
+
+- 浏览器只访问一个域名，**不跨域**，`LANDRIVE_CORS_ALLOW` 可以留空；
+- 后端地址不会出现在浏览器里。
+
 ::: tip 只在公司内网使用？
 页面和服务端放同一台服务器即可，看这一页就够了。
 
@@ -76,13 +81,16 @@ LANDRIVE_JWT_SECRET=把这里换成随机字符串
 # 管理员初始密码（仅首次启动时使用）
 LANDRIVE_ADMIN_PASSWORD=换成一个安全密码
 
-# 允许访问接口的网页地址，即用户浏览器里打开的地址
-LANDRIVE_CORS_ALLOW=https://files.example.com
+# 网页端把 /api 反代到服务端容器（默认值即可，浏览器因此不跨域）
+LANDRIVE_API_PROXY=api:8080
 ```
 
-::: warning LANDRIVE_CORS_ALLOW 一定要填对
-这一项是**用户实际访问的网址**（协议 + 域名 + 端口，不要带路径），例如
-`http://192.168.1.100` 或 `https://files.example.com`。
+`LANDRIVE_CORS_ALLOW` 用上面的默认反代时**可以留空**。
+
+::: warning 只有跨域直连时才需要填 LANDRIVE_CORS_ALLOW
+如果关掉了反代（把 `LANDRIVE_API_PROXY` 留空）并让浏览器直接访问接口地址，
+就必须把 `LANDRIVE_CORS_ALLOW` 填成**用户实际访问的网址**（协议 + 域名 + 端口，不要带路径），
+例如 `http://192.168.1.100` 或 `https://files.example.com`。
 
 填错的后果是浏览器拦截请求，用户会看到「无法在此网络下使用，请更换网络再试！」。
 :::
@@ -110,15 +118,21 @@ make up
 
 ## 第四步：在 1Panel 里配置访问入口
 
-进入 1Panel 的**网站**，添加一个反向代理网站，把域名指向本系统的两个端口：
+进入 1Panel 的**网站**，添加一个反向代理网站，把域名指向网页端：
 
 | 域名 | 反代到 |
 | --- | --- |
-| `files.example.com` | `http://127.0.0.1:80`（网页端） |
-| `api.example.com` | `http://127.0.0.1:8080`（接口） |
+| `files.example.com` | `http://127.0.0.1:80`（网页端，**只需这一条**） |
 
-如果两个端口都用了默认值，就不需要在 `.env` 里改。端口被占用时，
-改 `.env` 里的 `WEB_PORT` / `API_PORT` 即可。
+接口由网页端容器自己转发给服务端容器（即 `LANDRIVE_API_PROXY`），
+所以**不需要再给接口单独配一个域名**。
+
+::: tip 为什么只配一个域名
+浏览器访问 `https://files.example.com/api/...` 时，网页端容器的 nginx 会把 `/api` 转发给
+服务端容器。从浏览器视角看，页面和接口同源，既不跨域、也看不到后端地址。
+:::
+
+如果端口被占用，改 `.env` 里的 `WEB_PORT` / `API_PORT` 即可。
 
 ::: tip 只想在内网用
 不做反向代理也可以，直接用 `http://服务器IP` 访问。

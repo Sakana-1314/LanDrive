@@ -142,9 +142,19 @@ jobs:
         working-directory: web
         run: npm run typecheck
 
-      - name: 单元测试（网络可用性判定）
+      - name: 单元测试（网络判定 / API 基址 / 健康探测）
         working-directory: web
         run: npm test
+
+      # /api 同源反代与运行时配置注入属于"配置正确才工作"的部分：
+      # 写错了本地不会报错，要等容器启动或用户访问才暴露。
+      # 装上 nginx 后这里会额外校验生成的配置能被 nginx 真正解析。
+      - name: 安装 nginx（用于校验生成的配置）
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nginx
+
+      - name: 前端镜像运行时配置测试（/api 反代）
+        working-directory: web
+        run: npm run test:entrypoint
 
       - name: 生产构建
         working-directory: web
@@ -164,9 +174,13 @@ jobs:
             echo "::error::构建产物中缺少网络不可用提示文案"
             exit 1
           fi
-          # 构建期 HOST 必须被注入为 <HOST>/api，否则前端会打到错误地址。
-          if ! grep -rq "https://localhost/api" dist/assets/*.js; then
-            echo "::error::构建期 HOST 未注入到产物（应生成 <HOST>/api）"
+          # 构建期 HOST 必须被注入到产物，否则前端会打到错误地址。
+          # 注意：只断言 HOST 字符串本身。拼接 `<HOST>/api` 的逻辑在运行时执行
+          # （见 src/api/base-url.ts），产物里不会出现完整字面量，
+          # 之前按字面量断言会在重构后误报，这里改为断言注入值存在，
+          # 拼接行为由 npm test 的 base-url.spec.ts 覆盖。
+          if ! grep -rq "https://localhost" dist/assets/*.js; then
+            echo "::error::构建期 HOST 未注入到产物"
             exit 1
           fi
           echo "✅ 构建产物校验通过"

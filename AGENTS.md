@@ -13,8 +13,14 @@
 | `docs/websites/` | 文档站（VitePress），面向使用者的教程；`pages/` 是内容 |
 | `docs/scripts/smoke.sh` | 部署后端到端冒烟脚本 |
 
-**部署拓扑是硬约束**：前端在公网、API 在内网，两者跨域通信。任何改动都不得破坏这条边界，
+**部署拓扑是硬约束**：前端在公网、API 在内网。任何改动都不得破坏这条边界，
 也不得让后端承担托管页面的职责（`server` 不内嵌前端产物）。
+
+两者之间的连接有两种方式，前端的 API 地址解析必须同时兼容：
+
+- **同源反代**：前端镜像内的 nginx 把 `/api` 转发到后端（`LANDRIVE_API_PROXY`），
+  浏览器视角同源，不跨域、不需要 CORS。**推荐**，也是 compose 的默认形态。
+- **跨域直连**：浏览器直接请求后端绝对地址，需要后端配 `LANDRIVE_CORS_ALLOW`。
 
 ## 2. 协作与提交规范
 
@@ -48,8 +54,15 @@
 
 - **技术栈固定**：Vue 3 + TypeScript + Vite + Vue Router + Naive UI；状态用 `reactive` 单例（`src/stores/`），**不引入 Pinia**；时间筛选与图标不引入 date-fns / 额外图标库（用 `@vicons/ionicons5`）。
 - **接口层单点**：所有请求经 `src/api/index.ts` 的 axios 实例；类型定义在 `src/api/types.ts` 并与 `docs/design.md` 同步。**禁止在组件里直接 `fetch`/`axios`。**
-- **API 地址**：优先级为「运行时 `/config.js` → 构建期 `HOST`（`__API_HOST__`，拼成 `${HOST}/api`）→ 同源 `/api`」，解析逻辑只在 `src/api/index.ts` 的 `resolveApiBaseUrl` 里。`HOST` 是**构建期**环境变量（仅 origin，不含 `/api`），与同组织其它前端项目保持一致；容器部署还可用运行时 `LANDRIVE_API_BASE_URL` 覆盖，**不要为了换地址重新构建镜像**。
+- **API 地址**：优先级为「运行时 `/config.js` → 构建期 `HOST`（`__API_HOST__`，拼成 `${HOST}/api`）→ 同源 `/api`」，解析逻辑只在 `src/api/base-url.ts`（纯函数，便于在 Node 下单测；`index.ts` 只负责读取运行时配置并调用它）；健康探测的判定在 `src/api/health.ts`。`HOST` 是**构建期**环境变量（仅 origin，不含 `/api`），与同组织其它前端项目保持一致；容器部署还可用运行时 `LANDRIVE_API_BASE_URL` 覆盖，**不要为了换地址重新构建镜像**。
 - **网络判定**：区分「请求未到达服务器」（超时/连接失败/被 CORS 拦截 → 提示更换网络）与「有响应但业务失败」（按业务提示）。判定逻辑只在 `src/api/network.ts`。**绝不能把网络不可达显示成"密码错误"。**
+- **`/api` 同源反代**：前端镜像内置 nginx，可用 `LANDRIVE_API_PROXY=主机:端口` 把同源 `/api` 转发到后端容器（不跨域、免 CORS）。实现要点，改动时别踩：
+  - 入口脚本会同时（a）生成 `/etc/nginx/proxy.d/api.conf`，（b）把运行时 `apiBaseUrl` 写成 `/api`。**两者必须一起改**，只改一个会出现「配了反代但前端仍跨域直连」。
+  - 反代地址必须**校验后再拼进配置**：`grep` 按行匹配，含换行的值会绕过校验并注入 nginx 指令 —— 用 `case` 做整串匹配。非法值应让容器启动失败并打印原因。
+  - `proxy_pass` 用变量 + `resolver`（而非直接写主机名），否则后端容器未就绪时 nginx 会 `[emerg] host not found in upstream` 导致**整个前端起不来**。
+  - `proxy_pass` 用变量时不能带 URI；我们的需求正是保留 `/api` 前缀（后端路由就是 `/api/**`）。
+  - 未启用反代时 `/api` 必须返回 JSON 404，**不能落到 SPA 回退返回 200 HTML**，否则健康探测会把"未连通"误判为"已连通"。
+  - 回归测试：`npm run test:entrypoint`（`web/scripts/test-entrypoint.sh`），装了 nginx 时会用 `nginx -t` 校验生成的配置。
 - **上传**：走 `src/utils/upload.ts` 的 `UploadManager`（分片并发、断点续传、重试）；分片大小必须服从服务端 `init` 返回的 `chunk_size`，前端不得自行决定。
 - **预览**：预览库一律 `defineAsyncComponent` + 动态 `import()`，**主包不得引入 docx-preview / exceljs / pptx-preview**；新增预览类型时同步 `previewKind`（server）与预览矩阵表（`docs/design.md`）。
 - **样式**：用 Naive UI 组件与 `n-space`/`n-card` 布局，避免自写大段 CSS；主题令牌集中在 `src/utils/theme.ts`。
@@ -61,6 +74,8 @@
   （`networks: 1panel-network: external: true`），以便与面板里安装的其它应用互通。
 - **MySQL 不在编排里**：数据库用 1Panel 应用商店安装或指向已有实例，通过 `.env` 的
   `LANDRIVE_MYSQL_DSN` 连接。**不要**往 compose 里加 `mysql` 服务或 `mysql-data` 卷。
+- **网页端默认走 `/api` 同源反代**：`LANDRIVE_API_PROXY` 默认 `api:8080`，因此
+  1Panel 只需为网页端配一个域名，`LANDRIVE_CORS_ALLOW` 可留空。
 - **必填项用 `${VAR:?提示}`**：缺失时 compose 直接报错并给出可操作提示，不允许带空值启动。
   可选值用 `${VAR:-默认值}`。新增变量必须同步 `.env.example`。
 - **`.env` 不提交**（已在 `.gitignore`）；`.env.example` 只放占位与说明，不得出现真实域名、IP、密码。
@@ -78,6 +93,7 @@
   4. `AGENTS.md` 本条说明
 - **反之，以下名称必须保持小写，不要跟随仓库名改成 `LanDrive`**：ghcr 镜像路径（`ghcr.io/sakana-1314/lan-drive`）、`docker-compose.yml` 的 `name:` 与 `container_name:`、本地构建的镜像 tag。Docker 与 ghcr 均不接受大写。
 - **图用 Mermaid 写**（```` ```mermaid ```` 代码块，已接入 `vitepress-plugin-mermaid`），状态机用 `stateDiagram-v2`、流程用 `flowchart`；不要贴图片。
+- **部署文档要与镜像行为一致**：网页端默认用 `/api` 同源反代，文档不能再说「必须配 CORS」；只有跨域直连（`LANDRIVE_API_PROXY` 留空）时 `LANDRIVE_CORS_ALLOW` 才是必填。
 - **站内互引用相对路径**（如 `./deploy`、`../usage/login`）；VitePress 对死链只警告不报错，因此 `website.yml` 里有一次硬校验，改链接后请本地 `make docs` 确认。
 - **不要把 `node_modules` / `.vitepress/dist` 提交**（已在 `.gitignore`）。
 - 本地预览：`make docsdev`；构建：`make docs`。注意本仓库开发环境的 `NODE_ENV=production` 会让 npm 跳过 devDependencies，**安装时必须带 `--include=dev`**，否则 VitePress 装不上。
