@@ -59,7 +59,7 @@
 
 - **技术栈**：VitePress（源码 `docs/websites/pages/`，构建产物 `docs/websites/.vitepress/dist/`）。
 - **面向使用者**：文档站只讲**怎么部署、怎么用**，不写实现细节（那些放 `docs/design.md`）。语言要口语化、面向非开发同事。
-- **`base` 必须与仓库路径一致**（`/lan-drive/`），否则线上资源 404；仓库改名要同步改 `docs/websites/.vitepress/config.ts`。
+- **`base` 必须与仓库路径大小写完全一致**（当前为 `/lan-drive/`）。GitHub Pages 的路径**区分大小写**，仓库改名（尤其大小写）会让线上资源全部 404，必须同步改 `docs/websites/.vitepress/config.ts` 与 `website.yml` 的校验前缀。
 - **图用 Mermaid 写**（```` ```mermaid ```` 代码块，已接入 `vitepress-plugin-mermaid`），状态机用 `stateDiagram-v2`、流程用 `flowchart`；不要贴图片。
 - **站内互引用相对路径**（如 `./deploy`、`../usage/login`）；VitePress 对死链只警告不报错，因此 `website.yml` 里有一次硬校验，改链接后请本地 `make docs` 确认。
 - **不要把 `node_modules` / `.vitepress/dist` 提交**（已在 `.gitignore`）。

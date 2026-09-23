@@ -3,7 +3,9 @@ import { withMermaid } from 'vitepress-plugin-mermaid'
 
 /**
  * 站点源码在 pages/（srcDir），构建产物在 .vitepress/dist/。
- * base 必须与 GitHub Pages 的仓库路径一致：https://Sakana-1314.github.io/lan-drive/
+ * base 必须与 GitHub Pages 的仓库路径**大小写完全一致**：
+ *   https://sakana-1314.github.io/lan-drive/
+ * GitHub Pages 的路径区分大小写，写成小写会导致线上资源全部 404。
  *
  * withMermaid 让 ```mermaid 代码块渲染成图（部署拓扑、文件生命周期都用到）。
  */

@@ -25,7 +25,7 @@ concurrency:
 
 env:
   # 构建到工作区之外，再以全新历史提交，避免把源码树带进 gh-pages。
-  # 注意：站点 base 必须与仓库路径一致（config.ts 里为 /lan-drive/）。
+  # 注意：站点 base 必须与仓库路径大小写一致（config.ts 里为 /lan-drive/）。
   SITE_OUT_DIR: ${{ github.workspace }}/.site-dist
 
 jobs:
@@ -70,6 +70,7 @@ jobs:
               if url.startswith('/'):
                   rel = url.lstrip('/')
                   # 站点部署在 /lan-drive/ 下，绝对路径带该前缀
+                  # （GitHub Pages 路径区分大小写，与 config.ts 的 base 保持一致）
                   if rel.startswith('lan-drive/'):
                       rel = rel[len('lan-drive/'):]
               else:
