@@ -45,12 +45,12 @@ CORS 拦截）时，必须提示固定文案
 | --- | :---: | :---: |
 | 浏览 / 搜索全部文件 | ✅ | ✅ |
 | 在线预览、下载任意人的文件 | ✅ | ✅ |
-| 上传文件 | ✅ | ✅ |
+| 上传文件（在「我的文件」内拖入） | ✅ | ✅ |
 | 重命名 / 删除 | 仅自己上传的 | 任意文件 |
 | 查看回收站（已标记删除）、恢复、彻底删除 | ❌ | ✅ |
 | 用户管理 | ❌ | ✅ |
-| 系统配置（体积 / 类型 / 天数 / 分片 / 上传开关） | ❌ | ✅ |
-| 审计日志、统计、存储一致性扫描 | ❌ | ✅ |
+| 系统管理（体积 / 类型 / 天数 / 分片 / 上传开关 + 存储一致性检查） | ❌ | ✅ |
+| 统计、存储一致性扫描 | ❌ | ✅ |
 
 - 登录凭据：**工号 + 密码**；`name` 仅用于展示，允许重名，不参与登录。
 - 每个用户拥有独立目录 `users/<id>`，该相对路径显式记录在 `users.dir_rel`。
@@ -152,10 +152,15 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
 | `chunk_size_mb` | `4` | 1–64 |
 | `upload_enabled` | `true` | 维护期全局关闭上传 |
 
-### op_logs
+### user_pins
 
-`id`、`user_id`（可空）、`employee_no`、`action`、`target_type`、`target_id`、`detail`、`ip`、`created_at`。
-索引 `(created_at)`、`(action)`、`(user_id)`。动作取值：`login`、`login_failed`、`logout`、`upload`、`rename`、`delete`、`restore`、`purge`、`download`、`user_create`、`user_update`、`user_delete`、`password_change`、`password_reset`、`settings_update`、`maintain_expire`、`maintain_purge`、`maintain_orphan`、`storage_scan`。
+`owner_user_id`、`target_user_id`、`created_at`，主键 `(owner_user_id, target_user_id)`，索引 `(owner_user_id)`，两个外键均 `ON DELETE CASCADE`。
+
+表示「谁置顶了谁的目录」。置顶是**每个账号各自一份**的个人偏好，因此按 `(owner, target)` 建表而不是在 `users` 上加全局标记位——不同人看到的顺序可以不同。删账号时双向 CASCADE 自动清理引用，不会留下指向已删用户的幽灵项。
+
+`owner_user_id == target_user_id` 由服务层拒绝（400）：自己的文件在「我的文件」里始终可达，置顶自己没有意义。
+
+> 审计日志（原 `op_logs` 表）已整体下线，迁移 `0002_drop_logs_user_pins.sql` 会 DROP 该表。
 
 ---
 
@@ -181,7 +186,7 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
 | 5 分钟 | 到期标记删除 |
 | 10 分钟 | 物理清理（磁盘 + 数据库） |
 | 1 小时 | 僵尸上传会话（`uploading` 且 24h 未更新）连分片一起清理 |
-| 每天 03:30 | 审计日志裁剪（保留 90 天）；孤儿文件扫描（`users/**` 中不在 `files.rel_path` 的文件移入 `tmp/orphans`，再保留 7 天后删除） |
+| 每天 03:30 | 孤儿文件扫描（`users/**` 中不在 `files.rel_path` 的文件移入 `tmp/orphans`，再保留 7 天后删除） |
 
 多副本部署时用 `GET_LOCK('lanfs_maintain', 0)` 保证同一时刻只有一个实例执行清理。
 
@@ -249,7 +254,9 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/files` | 查询参数 `scope=all\|mine`、`owner_id`、`q`、`ext`、`page`（默认 1）、`page_size`（默认 20，上限 200）、`sort=created_at\|size_bytes\|expires_at\|original_name`、`order=desc\|asc`；返回 `Paged<FileItem>`。`scope=mine` 等价于 `owner_id=自己` |
-| GET | `/api/files/owners` | 返回 `{items: [{user_id, employee_no, name, file_count, used_bytes}], total}`，仅统计 `active` |
+| GET | `/api/files/owners` | 返回 `{items: [{user_id, employee_no, name, file_count, used_bytes, pinned}], total}`，仅统计 `active`；`pinned` 与排序按当前登录者计算（置顶优先） |
+| PUT | `/api/files/owners/:id/pin` | 置顶某人目录（幂等）→ 204 |
+| DELETE | `/api/files/owners/:id/pin` | 取消置顶（幂等）→ 204 |
 | GET | `/api/files/:id` | `FileItem` |
 | GET | `/api/files/:id/content` | 内联字节流，支持 `Range`，`Content-Type` 取 `mime`；用于预览与音视频拖动 |
 | GET | `/api/files/:id/download` | 附件下载，`Content-Disposition` 用 RFC 5987 还原原始文件名 |
@@ -276,11 +283,10 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | POST | `/api/admin/users/:id/password` | `{new_password}` → `{ok: true}` |
 | DELETE | `/api/admin/users/:id` | 有文件时 409（附 `file_count`）；`?purge_files=1` 先彻底删除其文件再删账号 |
 | GET | `/api/admin/settings` | `Settings` |
-| PUT | `/api/admin/settings` | 部分字段更新 → `Settings`（校验 + 审计 + 刷新缓存） |
+| PUT | `/api/admin/settings` | 部分字段更新 → `Settings`（校验 + 刷新缓存） |
 | GET | `/api/admin/files` | `status=active\|trashed\|all`、`owner_id`、`q`、`page`、`page_size` → `Paged<FileItem>` |
 | POST | `/api/admin/files/:id/restore` | 恢复 → `FileItem` |
 | DELETE | `/api/admin/files/:id` | 立即彻底删除（磁盘 + 行） |
-| GET | `/api/admin/logs` | `action`、`q`、`user_id`、`days=1\|7\|30`、`from`、`to`、`page`、`page_size` → `Paged<LogItem>` |
 | GET | `/api/admin/stats` | `Stats` |
 | POST | `/api/admin/storage/scan` | `{orphans: string[], missing: string[], invalid: string[], scanned_at: string}` |
 
@@ -312,7 +318,6 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | `LANDRIVE_ADMIN_NAME` | `系统管理员` | 种子管理员姓名 |
 | `LANDRIVE_TRUST_PROXY` | `false` | 是否采信 `X-Forwarded-For` |
 | `LANDRIVE_CORS_ALLOW` | 空 | ★ 逗号分隔的**前端域名**白名单；公网前端必须加入，否则跨域被拦截 |
-| `LANDRIVE_LOG_KEEP_DAYS` | `90` | 审计日志保留天数 |
 
 ---
 
@@ -321,15 +326,13 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | 路由 | 页面 | 说明 |
 | --- | --- | --- |
 | `/login` | 登录 | 工号 + 密码 |
-| `/files` | 全部文件 | 左侧用户目录树 + 右侧文件表，人人可下载 / 预览 |
-| `/files/mine` | 我的文件 | 仅自己的文件，可改名 / 删除 |
-| `/upload` | 上传 | 分片、并发、断点续传、进度与重试 |
+| `/files` | 全部文件 | 侧栏「全部文件」展开即为按人的子 tab（`?owner=<id>`，可置顶）；人人可下载 / 预览 |
+| `/files/mine` | 我的文件 | 仅自己的文件，可改名 / 删除；顶部内嵌上传面板（拖拽即传） |
 | `/preview/:id` | 预览 | 全屏预览 |
 | `/admin/users` | 用户管理 | 仅管理员 |
-| `/admin/settings` | 系统配置 | 仅管理员 |
+| `/admin/settings` | 系统管理 | 上传策略 + 存储一致性检查，仅管理员 |
 | `/admin/files` | 全部文件（含回收站） | 仅管理员 |
-| `/admin/logs` | 审计日志 | 仅管理员 |
-| `/admin/dashboard` | 统计看板 | 仅管理员 |
+| `/admin/workbench` | 工作台 | 关键指标 + 到期提醒，仅管理员 |
 | `/profile` | 个人设置 | 修改本人密码 |
 | `/network-blocked` | 网络不可用 | 接口不可达时展示，文案「无法在此网络下使用，请更换网络再试！」 |
 
@@ -377,5 +380,5 @@ API 地址解析优先级：**运行时 `/config.js` → 构建期 `HOST`（拼�
 - 扩展名策略在 `init` 与 `complete` 双重校验；以真实扩展名为准，大小写不敏感。
 - 未知类型强制 `application/octet-stream` + `Content-Disposition: attachment`；服务端不执行任何存储内容。
 - 密码 bcrypt（cost 10）；登录失败限流；修改密码后旧令牌因 `pwd_ver` 声明不匹配而失效。
-- 所有写操作记审计日志（含下载）。
+- 审计日志功能已下线（不记录、不展示）。
 - 数据库连接失败时启动重试 60 秒，超时给出 DSN 提示（适配容器启动顺序）。

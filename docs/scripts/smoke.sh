@@ -366,14 +366,27 @@ ok "当前配置：单文件 ${MAXMB}MB · 允许类型 $(jget "$CFG" "'全部' 
 [ "$RET" = "15" ] && ok "默认保留天数为 15 天（符合需求）" || info "   注意：保留天数已被管理员改为 $RET 天"
 [ "$TRASH" = "7" ] && ok "默认回收站保留 7 天（符合需求）" || info "   注意：回收站天数已被管理员改为 $TRASH 天"
 
-# ---------- 11. 审计与一致性 ----------
-info "11. 审计日志与存储一致性"
-LOGS="$(api GET "/api/admin/logs?days=1&page=1&page_size=50" "$ADMIN_TOKEN" '')"
-LOG_TOTAL=$(jget "$LOGS" "j.get('total',0)")
-[ "${LOG_TOTAL:-0}" -gt 0 ] && ok "审计日志已记录 $LOG_TOTAL 条" || bad "审计日志为空"
-
+# ---------- 11. 统计与一致性 ----------
+info "11. 统计与存储一致性"
 STATS="$(api GET /api/admin/stats "$ADMIN_TOKEN" '')"
 ok "统计：用户 $(jget "$STATS" "j.get('users')") · 有效文件 $(jget "$STATS" "j.get('files')") · 回收站 $(jget "$STATS" "j.get('trashed')") · 占用 $(jget "$STATS" "j.get('total_bytes')") 字节"
+
+# 用户置顶：每人各一份，接口幂等。
+# 必须挑一个"不是自己"的目标 —— 置顶自己被服务端拒绝（400）。
+MY_ID="$(jget "$(api GET /api/auth/me "$UTOKEN" '')" "j.get('user',{}).get('id')")"
+OWNERS="$(api GET /api/files/owners "$UTOKEN" '')"
+PIN_ID=$(jget "$OWNERS" "[o.get('user_id') for o in j.get('items',[]) if o.get('user_id') != $MY_ID][0] if len([o for o in j.get('items',[]) if o.get('user_id') != $MY_ID]) else ''")
+if [ -n "$PIN_ID" ]; then
+  CODE="$(httpcode PUT "/api/files/owners/$PIN_ID/pin" "$UTOKEN" '')"
+  [ "$CODE" = "204" ] && ok "置顶接口可用（204）" || bad "置顶失败（$CODE）"
+  CODE="$(httpcode DELETE "/api/files/owners/$PIN_ID/pin" "$UTOKEN" '')"
+  [ "$CODE" = "204" ] && ok "取消置顶可用（204）" || bad "取消置顶失败（$CODE）"
+  # 顺带覆盖边界：置顶自己必须被拒绝
+  CODE="$(httpcode PUT "/api/files/owners/$MY_ID/pin" "$UTOKEN" '')"
+  [ "$CODE" = "400" ] && ok "置顶自己被拒绝（400）" || bad "置顶自己应被拒绝，实际 $CODE"
+else
+  info "   跳过置顶检查（暂无其他用户目录）"
+fi
 
 SCAN="$(api POST /api/admin/storage/scan "$ADMIN_TOKEN" '')"
 ORPH=$(jget "$SCAN" "len(j.get('orphans',[]))")

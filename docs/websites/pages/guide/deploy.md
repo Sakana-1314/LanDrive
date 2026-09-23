@@ -199,5 +199,5 @@ docker compose down -v
 ## 下一步
 
 - [使用教程](../usage/login) —— 教同事怎么用
-- [管理员指南](../admin/users) —— 用户与系统设置
+- [管理员指南](../admin/users) —— 用户与系统管理
 - [常见问题](./faq) —— 遇到问题先看这里

@@ -54,11 +54,10 @@ export default withMermaid(
         {
           text: '管理员',
           items: [
-            { text: '统计看板', link: '/admin/dashboard' },
+            { text: '工作台', link: '/admin/workbench' },
             { text: '用户管理', link: '/admin/users' },
-            { text: '系统设置', link: '/admin/settings' },
+            { text: '系统管理', link: '/admin/settings' },
             { text: '文件与回收站', link: '/admin/files' },
-            { text: '操作日志', link: '/admin/logs' },
           ],
         },
       ],
