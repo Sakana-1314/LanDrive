@@ -1,8 +1,8 @@
 # LanDrive · 局域网文件助手
 
-[![测试](https://github.com/Sakana-1314/lan-drive/actions/workflows/test.yml/badge.svg)](https://github.com/Sakana-1314/lan-drive/actions/workflows/test.yml)
-[![构建并推送镜像](https://github.com/Sakana-1314/lan-drive/actions/workflows/build-images.yml/badge.svg)](https://github.com/Sakana-1314/lan-drive/actions/workflows/build-images.yml)
-[![镜像](https://img.shields.io/badge/ghcr.io-lan--drive-blue?logo=docker)](https://github.com/Sakana-1314/lan-drive/pkgs/container/lan-drive)
+[![测试](https://github.com/Sakana-1314/LanDrive/actions/workflows/test.yml/badge.svg)](https://github.com/Sakana-1314/LanDrive/actions/workflows/test.yml)
+[![构建并推送镜像](https://github.com/Sakana-1314/LanDrive/actions/workflows/build-images.yml/badge.svg)](https://github.com/Sakana-1314/LanDrive/actions/workflows/build-images.yml)
+[![镜像](https://img.shields.io/badge/ghcr.io-lan--drive-blue?logo=docker)](https://github.com/Sakana-1314/LanDrive/pkgs/container/lan-drive)
 
 一个可在局域网内部署的文件共享网盘。
 
@@ -18,7 +18,7 @@
 
 ## 文档
 
-使用教程与部署指南：**<https://sakana-1314.github.io/lan-drive/>**
+使用教程与部署指南：**<https://sakana-1314.github.io/LanDrive/>**
 
 ## 镜像
 
