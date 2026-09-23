@@ -16,6 +16,40 @@
 
 ## Log
 
+- **2026-09-23 P18 内网部署更新 + 发现并修复登录按钮失效**
+
+  **部署**（1Panel 主机 203.0.113.10，容器 LanDrive-API / LanDrive-Web）：
+  - 部署前备份：`/root/landrive-update-20260923-211104`（compose + mysqldump 16KB，含 36 条 op_logs）。
+  - 先起 web（新镜像），再起 api（api 启动时执行迁移 0002）。
+  - 结果：`schema_migrations` = 1,2；`op_logs` 已 DROP；`user_pins` 已建；
+    users=2、files=1（trashed）数据完好；`/api/health` 报 `schema_ver: 2`。
+  - 已下线的 `/api/admin/logs`、`/api/admin/logs/actions` 均返回 404。
+  - 从 compose 移除已失效的 `LANDRIVE_LOG_KEEP_DAYS`。
+  - 经真实域名 `drive.example.com` 验证：首页/SPA 深链/静态资源/`/api`
+    全部正常。主机本地 13 项功能校验全通过（含使用量口径、置顶往返与边界）。
+
+  **部署验收时发现一个从初始版本就存在的真实缺陷：点「登录」按钮毫无反应。**
+  - 现象：不报错、不发请求、页面不动；只有回车能登录。
+  - 根因：`<n-form>` 是**未解析的自定义元素** —— `LoginView.vue` 从未导入 `NForm`。
+    本项目按需导入 Naive UI，漏导入时 Vue 不报错、标签照进 DOM 但无行为，
+    于是 `attr-type="submit"` 的按钮所在"表单"根本不是 `<form>`。
+  - `git log -S 'attr-type="submit"'` 追到初始提交 `d5c7ff1` —— 从第一天起就点不动。
+  - 同一规则扫全站又发现 `UsersView` 的 `<n-empty>` / `<n-pagination>` 也未导入。
+  - 修复（PR #11）+ 新增 `web/scripts/check-component-imports.mjs` 并接入 `npm test`：
+    类型检查与单测都发现不了这类问题（vue-tsc 不管未解析自定义元素）。
+
+  **为什么之前的验证没抓到**：我在本地 mock 环境的验收一直用回车路径，
+  只有这次对"生产产物 + 生产 API"逐项点查才暴露 —— 说明验收要多走真实交互路径。
+
+  验证后再次更新 web 镜像（commit 2a7aaf6）。生产构建上确认：按钮已在 `<form>` 内，
+  点击发出 `POST /api/auth/login` 并跳转 `/files`；侧栏用户子 tab、
+  `/files?owner=5` 过滤标题、工作台指标、系统管理含存储一致性、
+  我的文件的拖拽条均正常。
+
+  **环境提示**：内网穿透隧道不稳，且**会截断大文件**（841KB 的 naive chunk 被截到
+  152KB，导致浏览器报 ERR_INCOMPLETE_CHUNKED_ENCODING）。本次改为在远端打包
+  `tar` 并校验 sha256 后本地托管，绕开隧道传输大文件；隧道本身用循环重连保活。
+
 - **2026-09-23 P17 导航重构：用户子 tab 可置顶、上传并入我的文件、下线审计日志**
   详见 PR #9 与 #10。
 
