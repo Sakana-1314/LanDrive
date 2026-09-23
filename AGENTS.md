@@ -57,6 +57,7 @@
 ## 6. CI/CD
 
 - **`test.yml`（测试）**：push 任意分支与 PR 触发。`detect` 按变更目录过滤（`server/**` / `web/**`）；后端起 MySQL 8.0 service 跑单元 + 集成测试，前端跑 typecheck / 单测 / 构建并校验产物（含固定文案存在性）。汇总 job `测试通过` 是分支保护的必需检查，路径跳过按成功处理。
+- **⚠️ 必需检查工作流禁止在 `on:` 上写 `paths` 过滤**：`测试通过` 是分支保护的必需检查，若在触发层就按路径过滤，只改 `docs/`、`README.md`、`todo.md` 的 PR 不会触发工作流，必需检查永不回报，PR 会永久卡在 `BLOCKED` 无法合并。正确做法是「**总是触发 + 在 job 内按变更目录跳过**」：`on` 不写 `paths`，由 `detect` 判断、子任务 `if` 跳过，汇总 job 始终回报状态。`build-images.yml` 不是必需检查，可以保留路径过滤以省额度。
 - **`build-images.yml`（构建并推送镜像）**：push `main` 与手动触发。推送到 **ghcr.io**，**固定 tag**：
   - `ghcr.io/sakana-1314/lan-drive:server`（内网 API）
   - `ghcr.io/sakana-1314/lan-drive:web`（公网前端）
