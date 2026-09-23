@@ -21,7 +21,7 @@ import {
   type DataTableColumns,
   type FormInst
 } from 'naive-ui'
-import { AddOutline, KeyOutline, RefreshOutline } from '@vicons/ionicons5'
+import { AddOutline, KeyOutline } from '@vicons/ionicons5'
 import {
   adminCreateUser,
   adminDeleteUser,
@@ -32,8 +32,10 @@ import {
 } from '@/api'
 import type { User } from '@/api/types'
 import { formatBytes, formatTime } from '@/utils/format'
+import { useIsMobile } from '@/utils/themeState'
 
 const message = useMessage()
+const isMobile = useIsMobile()
 
 const items = ref<User[]>([])
 const total = ref(0)
@@ -219,36 +221,27 @@ onMounted(load)
 <template>
   <n-space vertical :size="14">
     <n-card :bordered="false" size="small" style="border-radius: 8px">
-      <template #header>
-        <n-space justify="space-between" align="center" style="width: 100%">
-          <n-space align="center" :size="8">
-            <n-text strong style="font-size: 16px">用户管理</n-text>
-            <n-tag size="small" :bordered="false">共 {{ total }} 个账号</n-tag>
-          </n-space>
-          <n-space :size="8">
-            <n-input
-              v-model:value="keyword"
-              placeholder="搜索工号或姓名"
-              clearable
-              style="width: 220px"
-              @keyup.enter="((page = 1), load())"
-            />
-            <n-button @click="((page = 1), load())">
-              <template #icon>
-                <n-icon><refresh-outline /></n-icon>
-              </template>
-              查询
-            </n-button>
-            <n-button type="primary" @click="showCreate = true">
-              <template #icon>
-                <n-icon><add-outline /></n-icon>
-              </template>
-              新建账号
-            </n-button>
-          </n-space>
-        </n-space>
-      </template>
+      <div class="section-head" :class="{ 'section-head--stack': isMobile }">
+        <div class="section-head__title">
+          <n-tag size="small" :bordered="false">{{ total }} 个账号</n-tag>
+        </div>
+        <div class="user-toolbar">
+          <n-input
+            v-model:value="keyword"
+            placeholder="搜索工号或姓名"
+            clearable
+            @keyup.enter="((page = 1), load())"
+          />
+          <n-button type="primary" @click="showCreate = true">
+            <template #icon>
+              <n-icon><add-outline /></n-icon>
+            </template>
+            新建
+          </n-button>
+        </div>
+      </div>
 
+      <div class="desktop-only">
       <n-data-table
         :columns="columns"
         :data="items"
@@ -278,10 +271,52 @@ onMounted(load)
           }
         "
       />
+      </div>
+
+      <!-- 移动端：账号卡片 -->
+      <div class="mobile-only">
+        <n-empty v-if="!items.length" description="暂无账号" style="padding: 28px 0" />
+        <ul v-else class="user-cards">
+          <li v-for="u in items" :key="u.id" class="user-card">
+            <div class="user-card__top">
+              <span class="user-card__name">{{ u.name }}</span>
+              <span class="user-card__no">{{ u.employee_no }}</span>
+              <n-tag size="small" :type="u.role === 'admin' ? 'warning' : 'default'" :bordered="false">
+                {{ u.role === 'admin' ? '管理员' : '用户' }}
+              </n-tag>
+              <n-tag v-if="!u.enabled" size="small" type="error" :bordered="false">停用</n-tag>
+            </div>
+            <div class="user-card__meta">
+              <span>{{ u.file_count }} 个文件</span>
+              <span>{{ formatBytes(u.used_bytes) }}</span>
+              <span>{{ formatTime(u.last_login_at) }}</span>
+            </div>
+            <div class="user-card__actions">
+              <n-button size="small" quaternary @click="openEdit(u)">编辑</n-button>
+              <n-button size="small" quaternary @click="openReset(u)">重置密码</n-button>
+              <n-button size="small" quaternary type="error" @click="openDelete(u)">删除</n-button>
+            </div>
+          </li>
+        </ul>
+        <n-pagination
+          v-if="total > pageSize"
+          class="mobile-pager"
+          :page="page"
+          :page-size="pageSize"
+          :item-count="total"
+          :page-slot="5"
+          @update:page="
+            (v: number) => {
+              page = v
+              load()
+            }
+          "
+        />
+      </div>
     </n-card>
 
     <!-- 新建账号 -->
-    <n-modal v-model:show="showCreate" preset="card" title="新建账号" style="width: 460px">
+    <n-modal v-model:show="showCreate" preset="card" title="新建账号" :style="{ width: isMobile ? '92vw' : '460px' }">
       <n-form ref="createRef" label-placement="left" label-width="80">
         <n-form-item label="工号">
           <n-input v-model:value="createForm.employee_no" placeholder="登录用，创建后不可修改" />
@@ -305,9 +340,6 @@ onMounted(load)
             placeholder="至少 6 位，建议首次登录后修改"
           />
         </n-form-item>
-        <n-text depth="3" style="font-size: 12px; display: block; margin-bottom: 10px">
-          创建后会自动为该用户建立独立目录 users/&lt;ID&gt;。
-        </n-text>
       </n-form>
       <template #footer>
         <n-space justify="end">
@@ -318,7 +350,7 @@ onMounted(load)
     </n-modal>
 
     <!-- 编辑账号 -->
-    <n-modal v-model:show="showEdit" preset="card" title="编辑账号" style="width: 440px">
+    <n-modal v-model:show="showEdit" preset="card" title="编辑账号" :style="{ width: isMobile ? '92vw' : '440px' }">
       <n-form label-placement="left" label-width="80">
         <n-form-item label="工号">
           <n-input :value="editTarget?.employee_no" disabled />
@@ -336,7 +368,6 @@ onMounted(load)
         </n-form-item>
         <n-form-item label="启用">
           <n-switch v-model:value="editForm.enabled" />
-          <n-text depth="3" style="font-size: 12px; margin-left: 8px">停用后该账号立即无法登录</n-text>
         </n-form-item>
       </n-form>
       <template #footer>
@@ -348,7 +379,7 @@ onMounted(load)
     </n-modal>
 
     <!-- 重置密码 -->
-    <n-modal v-model:show="showReset" preset="card" title="重置密码" style="width: 420px">
+    <n-modal v-model:show="showReset" preset="card" title="重置密码" :style="{ width: isMobile ? '92vw' : '420px' }">
       <n-space vertical :size="10">
         <n-text>
           为 <b>{{ resetTarget?.name }}（{{ resetTarget?.employee_no }}）</b> 设置新密码
@@ -359,7 +390,7 @@ onMounted(load)
           show-password-on="click"
           placeholder="新密码，至少 6 位"
         />
-        <n-text depth="3" style="font-size: 12px">重置后该用户已登录的会话会立即失效，需要使用新密码重新登录。</n-text>
+        <n-text depth="3">重置后该用户的登录状态立即失效。</n-text>
       </n-space>
       <template #footer>
         <n-space justify="end">
@@ -375,7 +406,7 @@ onMounted(load)
     </n-modal>
 
     <!-- 删除账号 -->
-    <n-modal v-model:show="showDelete" preset="card" title="删除账号" style="width: 480px">
+    <n-modal v-model:show="showDelete" preset="card" title="删除账号" :style="{ width: isMobile ? '92vw' : '480px' }">
       <n-space vertical :size="12">
         <n-text>
           即将删除账号 <b>{{ deleteTarget?.name }}（{{ deleteTarget?.employee_no }}）</b>。
@@ -390,7 +421,6 @@ onMounted(load)
             不开启则删除会失败，请先转移或删除这些文件。
           </n-text>
         </n-space>
-        <n-text depth="3" style="font-size: 12px">删除后该账号的目录也会被移除。</n-text>
       </n-space>
       <template #footer>
         <n-space justify="end">
@@ -406,3 +436,102 @@ onMounted(load)
     </n-modal>
   </n-space>
 </template>
+
+<style scoped>
+.user-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-toolbar :deep(.n-input) {
+  width: 220px;
+}
+
+.user-cards {
+  display: grid;
+  /* minmax(0,…) 防止 nowrap 内容把网格列撑宽（grid 子项默认 min-width:auto） */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.user-card {
+  padding: 12px 13px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+}
+
+.user-card__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.user-card__name {
+  color: var(--color-text-strong);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.user-card__no {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.user-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.user-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.mobile-pager {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.mobile-only {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .desktop-only {
+    display: none;
+  }
+
+  .mobile-only {
+    display: block;
+  }
+
+  .section-head--stack {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .user-toolbar {
+    width: 100%;
+  }
+
+  .user-toolbar :deep(.n-input) {
+    flex: 1;
+    width: auto;
+  }
+}
+</style>

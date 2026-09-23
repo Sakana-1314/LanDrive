@@ -1,5 +1,9 @@
 <script setup lang="ts">
 // 上传页：拖拽/选择文件 → 分片并发上传 → 断点续传 → 进度与结果。
+//
+// 文案取舍：不再罗列「支持分片 / 刷新可续传 / 24 小时」这类说明 ——
+// 上传策略（体积上限、允许类型、分片大小）由顶部标签直接给出，
+// 续传由状态标签（续传中）体现，界面本身说明功能。
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -9,15 +13,17 @@ import {
   NEmpty,
   NIcon,
   NProgress,
-  NSpace,
   NTag,
-  NText,
   NUpload,
   NUploadDragger,
   useMessage,
   type UploadFileInfo
 } from 'naive-ui'
-import { CloudUploadOutline, DocumentOutline, TrashOutline } from '@vicons/ionicons5'
+import {
+  CheckmarkCircleOutline,
+  CloudUploadOutline,
+  TrashOutline
+} from '@vicons/ionicons5'
 import { errMsg, uploadConfig } from '@/api'
 import { applyUploadConfig, state as userState, uploadState, validateFile } from '@/stores/user'
 import { UploadManager, sweepPersisted, type UploadTask } from '@/utils/upload'
@@ -28,18 +34,16 @@ const message = useMessage()
 
 const tasks = ref<UploadTask[]>([])
 let manager: UploadManager | null = null
-
 const configLoaded = ref(false)
 
 function ensureManager(): UploadManager {
   if (!manager) {
     manager = new UploadManager(userState.user?.employee_no || 'anon', {
       onUpdate: () => {
-        // 触发响应式更新（tasks 内的对象是同一引用）。
         tasks.value = [...tasks.value]
       },
       onDone: (t) => {
-        message.success(`「${t.file.name}」上传完成`)
+        message.success(`「${t.file.name}」已上传`)
         tasks.value = [...tasks.value]
       },
       onError: (t) => {
@@ -89,9 +93,8 @@ function retry(t: UploadTask) {
   if (t.state !== 'error') return
   const m = ensureManager()
   m.remove(t)
-  const nt = m.add(t.file)
+  m.add(t.file)
   tasks.value = [...m.tasks]
-  void nt
 }
 
 function previewFile(t: UploadTask) {
@@ -107,7 +110,14 @@ function clearFinished() {
 }
 
 const activeCount = computed(
-  () => tasks.value.filter((t) => t.state === 'uploading' || t.state === 'hashing' || t.state === 'merging').length
+  () =>
+    tasks.value.filter(
+      (t) => t.state === 'uploading' || t.state === 'hashing' || t.state === 'merging'
+    ).length
+)
+
+const finishedCount = computed(
+  () => tasks.value.filter((t) => t.state === 'done' || t.state === 'canceled').length
 )
 
 function progressStatus(t: UploadTask): 'default' | 'success' | 'error' | 'warning' {
@@ -126,7 +136,7 @@ function stateLabel(t: UploadTask): string {
     case 'uploading':
       return t.resumed ? '续传中' : '上传中'
     case 'merging':
-      return '服务器合并中'
+      return '合并中'
     case 'done':
       return '已完成'
     case 'error':
@@ -136,16 +146,23 @@ function stateLabel(t: UploadTask): string {
   }
 }
 
-const allowHint = computed(() => {
-  if (!configLoaded.value) return '正在读取上传策略…'
-  const parts = [`单文件最大 ${uploadState.maxFileSizeMB} MB`, `分片 ${uploadState.chunkSizeMB} MB`]
-  if (uploadState.allowAll) {
-    parts.push('允许所有文件类型')
-  } else {
-    parts.push(`允许类型：${uploadState.allowedExtensions.join('、')}`)
-  }
-  return parts.join(' · ')
+function stateType(t: UploadTask): 'default' | 'success' | 'error' | 'warning' | 'info' {
+  if (t.state === 'done') return 'success'
+  if (t.state === 'error') return 'error'
+  if (t.state === 'canceled') return 'warning'
+  if (t.state === 'uploading') return 'info'
+  return 'default'
+}
+
+/** 上传限制：拆成独立标签，比一整句拼接文字更好扫读。 */
+const limitTags = computed(() => {
+  if (!configLoaded.value) return []
+  const tags = [`最大 ${uploadState.maxFileSizeMB} MB`]
+  tags.push(uploadState.allowAll ? '不限类型' : uploadState.allowedExtensions.join(' / '))
+  return tags
 })
+
+const uploadDisabled = computed(() => configLoaded.value && !uploadState.uploadEnabled)
 
 onMounted(() => {
   sweepPersisted()
@@ -154,136 +171,234 @@ onMounted(() => {
 </script>
 
 <template>
-  <n-space vertical :size="14">
-    <n-alert v-if="!uploadState.uploadEnabled && configLoaded" type="warning" title="上传已暂停">
-      管理员已暂停上传功能，请联系管理员开启后再试。
+  <div class="upload-page">
+    <n-alert v-if="uploadDisabled" type="warning" title="上传已暂停">
+      管理员已暂停上传功能。
     </n-alert>
 
-    <n-card :bordered="false" size="small" style="border-radius: 8px">
-      <template #header>
-        <n-space align="center" :size="8">
-          <n-icon color="#1f6feb"><cloud-upload-outline /></n-icon>
-          <n-text strong style="font-size: 16px">上传文件</n-text>
-          <n-tag size="small" :bordered="false">{{ allowHint }}</n-tag>
-        </n-space>
-      </template>
+    <n-card class="card-surface" :bordered="false">
+      <div class="section-head">
+        <div class="section-head__title">上传文件</div>
+        <div class="limit-tags">
+          <n-tag v-for="tag in limitTags" :key="tag" size="small" :bordered="false">{{ tag }}</n-tag>
+        </div>
+      </div>
 
       <n-upload
         multiple
         :show-file-list="false"
-        :disabled="configLoaded && !uploadState.uploadEnabled"
+        :disabled="uploadDisabled"
         :custom-request="() => {}"
         @before-upload="onBeforeUpload"
       >
-        <n-upload-dragger>
-          <n-space vertical align="center" :size="8" style="padding: 18px 0">
-            <n-icon size="46" color="#1f6feb"><cloud-upload-outline /></n-icon>
-            <n-text style="font-size: 15px">点击选择文件，或将文件拖拽到此区域</n-text>
-            <n-text depth="3" style="font-size: 12px">
-              支持大文件分片上传；刷新页面或断网后可自动续传（未完成的任务保留 24 小时）
-            </n-text>
-          </n-space>
+        <n-upload-dragger class="dragger">
+          <div class="dragger-inner">
+            <div class="dragger-icon">
+              <n-icon :size="30"><cloud-upload-outline /></n-icon>
+            </div>
+            <div class="dragger-title">点击或拖拽文件到此处</div>
+          </div>
         </n-upload-dragger>
       </n-upload>
     </n-card>
 
-    <n-card :bordered="false" size="small" style="border-radius: 8px">
-      <template #header>
-        <n-space align="center" justify="space-between" style="width: 100%">
-          <n-space align="center" :size="8">
-            <n-icon><document-outline /></n-icon>
-            <n-text strong>上传队列</n-text>
-            <n-tag v-if="activeCount > 0" size="small" type="info" :bordered="false">
-              {{ activeCount }} 个进行中
-            </n-tag>
-          </n-space>
-          <n-button size="small" quaternary :disabled="tasks.length === 0" @click="clearFinished">
-            清除已完成
-          </n-button>
-        </n-space>
-      </template>
+    <n-card class="card-surface" :bordered="false">
+      <div class="section-head">
+        <div class="section-head__title">
+          上传队列
+          <n-tag v-if="activeCount" size="small" type="info" :bordered="false">
+            {{ activeCount }} 进行中
+          </n-tag>
+        </div>
+        <n-button size="small" quaternary :disabled="!finishedCount" @click="clearFinished">
+          清除已完成
+        </n-button>
+      </div>
 
-      <n-empty v-if="tasks.length === 0" description="暂无上传任务" style="padding: 20px 0" />
+      <n-empty v-if="!tasks.length" description="暂无上传任务" style="padding: 24px 0" />
 
-      <n-space v-else vertical :size="12">
-        <div v-for="t in tasks" :key="t.id" class="task-row">
-          <n-space justify="space-between" align="center" :size="8">
-            <n-space align="center" :size="8" style="min-width: 0">
-              <n-text strong style="max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-                {{ t.file.name }}
-              </n-text>
-              <n-tag size="tiny" :bordered="false" :type="t.state === 'done' ? 'success' : t.state === 'error' ? 'error' : 'default'">
-                {{ stateLabel(t) }}
-              </n-tag>
-              <n-tag v-if="t.resumed && t.state === 'uploading'" size="tiny" type="info" :bordered="false">
-                断点续传
-              </n-tag>
-            </n-space>
-            <n-space :size="6" align="center">
-              <n-text depth="3" style="font-size: 12px">
-                {{ formatBytes(t.loaded) }} / {{ formatBytes(t.total) }}
-                <template v-if="t.state === 'uploading' && t.speed > 0">
-                  · {{ formatSpeed(t.speed) }} · 剩余约 {{ formatDuration(t.eta) }}
-                </template>
-              </n-text>
-              <n-button
-                v-if="t.state === 'done' && t.result"
-                size="tiny"
-                quaternary
-                type="primary"
-                @click="previewFile(t)"
-              >
-                预览
-              </n-button>
-              <n-button v-if="t.state === 'error'" size="tiny" quaternary type="primary" @click="retry(t)">
-                重试
-              </n-button>
-              <n-button
-                v-if="t.state === 'uploading' || t.state === 'hashing' || t.state === 'merging'"
-                size="tiny"
-                quaternary
-                type="warning"
-                @click="cancel(t)"
-              >
-                取消
-              </n-button>
-              <n-button
-                v-if="t.state === 'done' || t.state === 'error' || t.state === 'canceled'"
-                size="tiny"
-                quaternary
-                @click="removeTask(t)"
-              >
-                <template #icon>
-                  <n-icon><trash-outline /></n-icon>
-                </template>
-              </n-button>
-            </n-space>
-          </n-space>
+      <ul v-else class="task-list">
+        <li v-for="t in tasks" :key="t.id" class="task">
+          <div class="task__head">
+            <span class="task__name" :title="t.file.name">{{ t.file.name }}</span>
+            <n-tag size="small" :type="stateType(t)" :bordered="false">{{ stateLabel(t) }}</n-tag>
+            <span class="task__spacer" />
+            <span class="task__size">{{ formatBytes(t.loaded) }} / {{ formatBytes(t.total) }}</span>
+          </div>
 
           <n-progress
             type="line"
             :percentage="t.percent"
             :status="progressStatus(t)"
-            :height="8"
-            :border-radius="4"
-            style="margin-top: 6px"
+            :height="6"
+            :border-radius="3"
+            :show-indicator="false"
+            class="task__bar"
           />
-          <n-text v-if="t.error" type="error" style="font-size: 12px">{{ t.error }}</n-text>
-          <n-text v-if="t.state === 'done' && t.result" depth="3" style="font-size: 12px">
-            已保存到你的目录，{{ formatBytes(t.result.size_bytes) }}，
-            {{ new Date(t.result.expires_at).toLocaleDateString() }} 到期
-          </n-text>
-        </div>
-      </n-space>
+
+          <div class="task__foot">
+            <span v-if="t.state === 'uploading' && t.speed > 0" class="task__speed">
+              {{ formatSpeed(t.speed) }} · 剩余 {{ formatDuration(t.eta) }}
+            </span>
+            <span v-else-if="t.state === 'done' && t.result" class="task__speed">
+              <n-icon color="var(--color-success)" :size="14"><checkmark-circle-outline /></n-icon>
+              {{ formatBytes(t.result.size_bytes) }}
+            </span>
+            <span v-else-if="t.error" class="task__error">{{ t.error }}</span>
+            <span class="task__spacer" />
+
+            <n-button v-if="t.state === 'done' && t.result" size="small" quaternary type="primary" @click="previewFile(t)">
+              预览
+            </n-button>
+            <n-button v-if="t.state === 'error'" size="small" quaternary type="primary" @click="retry(t)">
+              重试
+            </n-button>
+            <n-button
+              v-if="t.state === 'uploading' || t.state === 'hashing' || t.state === 'merging'"
+              size="small"
+              quaternary
+              @click="cancel(t)"
+            >
+              取消
+            </n-button>
+            <n-button
+              v-if="t.state === 'done' || t.state === 'error' || t.state === 'canceled'"
+              size="small"
+              quaternary
+              aria-label="移除记录"
+              @click="removeTask(t)"
+            >
+              <template #icon>
+                <n-icon><trash-outline /></n-icon>
+              </template>
+            </n-button>
+          </div>
+        </li>
+      </ul>
     </n-card>
-  </n-space>
+  </div>
 </template>
 
 <style scoped>
-.task-row {
-  padding: 10px 12px;
-  border: 1px solid #efefef;
-  border-radius: 8px;
-  background: #fafbfc;
+.upload-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.limit-tags {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.dragger :deep(.n-upload-dragger) {
+  padding: 26px 16px;
+}
+
+.dragger-inner {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+}
+
+.dragger-icon {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border-radius: 16px;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.dragger-title {
+  color: var(--color-text-strong);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.task-list {
+  display: grid;
+  /* minmax(0,…) 防止 nowrap 内容把网格列撑宽（grid 子项默认 min-width:auto） */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task {
+  padding: 12px 13px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+}
+
+.task__head,
+.task__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task__spacer {
+  flex: 1;
+}
+
+.task__size,
+.task__speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.task__error {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-danger);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task__bar {
+  margin: 10px 0;
+}
+
+@media (max-width: 768px) {
+  .section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .limit-tags {
+    justify-content: flex-start;
+  }
+
+  /* 移动端：进度信息换行到操作键上方，避免挤压 */
+  .task__foot {
+    flex-wrap: wrap;
+  }
+
+  .task__size {
+    display: none;
+  }
 }
 </style>

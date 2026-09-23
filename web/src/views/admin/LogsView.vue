@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 审计日志：按动作、关键字与时间范围筛选。
-import { onMounted, ref } from 'vue'
+import { h, onMounted, ref } from 'vue'
 import {
   NButton,
   NCard,
@@ -8,9 +8,7 @@ import {
   NIcon,
   NInput,
   NSelect,
-  NSpace,
   NTag,
-  NText,
   useMessage,
   type DataTableColumns
 } from 'naive-ui'
@@ -18,8 +16,10 @@ import { RefreshOutline, SearchOutline } from '@vicons/ionicons5'
 import { adminListLogs, errMsg } from '@/api'
 import type { LogEntry } from '@/api/types'
 import { formatTime } from '@/utils/format'
+import { useIsMobile } from '@/utils/themeState'
 
 const message = useMessage()
+const isMobile = useIsMobile()
 
 const items = ref<LogEntry[]>([])
 const total = ref(0)
@@ -130,51 +130,46 @@ const columns: DataTableColumns<LogEntry> = [
   { title: 'IP', key: 'ip', width: 140 }
 ]
 
-import { h } from 'vue'
-
 onMounted(load)
 </script>
 
 <template>
   <n-card :bordered="false" size="small" style="border-radius: 8px">
-    <template #header>
-      <n-space justify="space-between" align="center" style="width: 100%">
-        <n-space align="center" :size="8">
-          <n-text strong style="font-size: 16px">审计日志</n-text>
-          <n-tag size="small" :bordered="false">共 {{ total }} 条</n-tag>
-          <n-text depth="3" style="font-size: 12px">默认保留 90 天，超期自动清理</n-text>
-        </n-space>
-        <n-space :size="8">
-          <n-select
-            v-model:value="action"
-            :options="actionOptions"
-            style="width: 170px"
-            size="small"
-            @update:value="search"
-          />
-          <n-select v-model:value="days" :options="dayOptions" style="width: 110px" size="small" @update:value="search" />
-          <n-input
-            v-model:value="keyword"
-            placeholder="搜索工号 / 详情"
-            clearable
-            size="small"
-            style="width: 200px"
-            @keyup.enter="search"
-          >
-            <template #prefix>
-              <n-icon><search-outline /></n-icon>
-            </template>
-          </n-input>
-          <n-button size="small" @click="search">
-            <template #icon>
-              <n-icon><refresh-outline /></n-icon>
-            </template>
-            查询
-          </n-button>
-        </n-space>
-      </n-space>
-    </template>
+    <div class="section-head" :class="{ 'section-head--stack': isMobile }">
+      <div class="section-head__title">
+        <n-tag size="small" :bordered="false">{{ total }} 条</n-tag>
+      </div>
+      <div class="log-filters">
+        <n-select
+          v-model:value="action"
+          :options="actionOptions"
+          class="filter-action"
+          size="small"
+          @update:value="search"
+        />
+        <n-select v-model:value="days" :options="dayOptions" class="filter-days" size="small" @update:value="search" />
+        <n-input
+          v-model:value="keyword"
+          placeholder="搜索工号或详情"
+          clearable
+          size="small"
+          class="filter-keyword"
+          @keyup.enter="search"
+        >
+          <template #prefix>
+            <n-icon><search-outline /></n-icon>
+          </template>
+        </n-input>
+        <n-button size="small" @click="search">
+          <template #icon>
+            <n-icon><refresh-outline /></n-icon>
+          </template>
+          查询
+        </n-button>
+      </div>
+    </div>
 
+    <div class="desktop-only">
     <n-data-table
       :columns="columns"
       :data="items"
@@ -204,5 +199,153 @@ onMounted(load)
         }
       "
     />
+    </div>
+
+    <!-- 移动端：日志条目列表（宽表格在手机上无法阅读） -->
+    <div class="mobile-only">
+      <n-empty v-if="!items.length" description="暂无日志" style="padding: 28px 0" />
+      <ul v-else class="log-cards">
+        <li v-for="r in items" :key="r.id" class="log-card">
+          <div class="log-card__top">
+            <n-tag size="small" :type="actionType(r.action)" :bordered="false">
+              {{ actionLabels[r.action] || r.action }}
+            </n-tag>
+            <span class="log-card__who">{{ r.employee_no || '系统' }}</span>
+            <span class="log-card__spacer" />
+            <span class="log-card__time">{{ formatTime(r.created_at, true) }}</span>
+          </div>
+          <div v-if="r.detail" class="log-card__detail">{{ r.detail }}</div>
+          <div v-if="r.ip" class="log-card__ip">{{ r.ip }}</div>
+        </li>
+      </ul>
+      <n-pagination
+        v-if="total > pageSize"
+        class="mobile-pager"
+        :page="page"
+        :page-size="pageSize"
+        :item-count="total"
+        :page-slot="5"
+        @update:page="
+          (v: number) => {
+            page = v
+            load()
+          }
+        "
+      />
+    </div>
   </n-card>
 </template>
+
+<style scoped>
+.log-filters {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-action {
+  width: 170px;
+}
+
+.filter-days {
+  width: 110px;
+}
+
+.filter-keyword {
+  width: 200px;
+}
+
+.log-cards {
+  display: grid;
+  /* minmax(0,…) 防止 nowrap 内容把网格列撑宽（grid 子项默认 min-width:auto） */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.log-card {
+  padding: 11px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+}
+
+.log-card__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-card__who {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.log-card__spacer {
+  flex: 1;
+}
+
+.log-card__time {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.log-card__detail {
+  margin-top: 6px;
+  color: var(--color-text);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.log-card__ip {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.mobile-pager {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.mobile-only {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .desktop-only {
+    display: none;
+  }
+
+  .mobile-only {
+    display: block;
+  }
+
+  .section-head--stack {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .log-filters {
+    width: 100%;
+  }
+
+  .filter-action,
+  .filter-days {
+    flex: 1;
+    width: auto;
+  }
+
+  .filter-keyword {
+    flex: 1 1 100%;
+    width: auto;
+  }
+}
+</style>

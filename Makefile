@@ -145,6 +145,7 @@ check: webinstall
 	@echo "== 前端类型检查 =="; cd $(WEB) && npm run typecheck
 	@echo "== 前端单元测试 =="; cd $(WEB) && npm test
 	@echo "== 前端镜像运行时配置测试 =="; cd $(WEB) && npm run test:entrypoint
+	@echo "== 响应式布局检查（需 playwright，未装则跳过）=="; cd $(WEB) && npm run test:responsive
 	@echo "✅ 全部检查通过"
 
 # ============ 部署 ============
