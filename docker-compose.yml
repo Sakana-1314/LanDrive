@@ -1,84 +1,63 @@
-# 局域网文件助手 —— 部署拓扑
+# 局域网文件助手 —— 部署编排（接入 1Panel 的 1panel-network）
 #
-#   公网用户 ──> 前端静态站点（web/ 构建产物，部署在公网）
-#                     │  跨域 HTTPS 请求 /api/**
-#                     ▼
-#              内网 API 服务（本 compose 中的 app，仅内网可达）
-#                     │
-#                     ▼
-#                  MySQL
+# 网络模型：
+#   本编排不创建网络，所有服务加入 1Panel 已有的 1panel-network，
+#   与 1Panel 里安装的其它应用（MySQL、反向代理等）直接互通。
+#   使用前请确认该网络已存在：docker network ls | grep 1panel-network
 #
-# 镜像：ghcr.io/sakana-1314/lan-drive:server（由 .github/workflows/build-images.yml 自动构建推送）
-#      需要从源码构建时，把 app 下的 build: 注释打开、image: 注释掉。
+# 数据库：
+#   MySQL **不在本编排中部署**，请用 1Panel 应用商店安装 MySQL，或指向已有的数据库实例，
+#   然后通过 .env 的 LANDRIVE_MYSQL_DSN 填写连接串（见 .env.example）。
 #
-# 关键配置：
-#   1. LANDRIVE_CORS_ALLOW 必须填**前端所在域名**（如 https://files.your-company.com），
-#      否则浏览器会拦截跨域请求，用户会看到「无法在此网络下使用，请更换网络再试！」。
-#   2. app 的 8080 端口**不要暴露到公网**，只在内网可达；
-#      公网侧通过 VPN 或内网网关访问。用防火墙/安全组限制来源网段。
-#   3. 前端部署时用 LANDRIVE_API_BASE_URL（或构建期 HOST）指向内网 API 地址。
+# 组件：
+#   api —— 服务端接口（必需）
+#   web —— 网页端（如需外网访问页面则保留；只在内网用可整段删除）
+#
+# 启动：
+#   cp .env.example .env    # 按注释填写，必填项没填会直接报错
+#   docker compose up -d
+#
+# 反向代理：
+#   在 1Panel 的「网站」里把域名反代到 http://<服务器IP>:${WEB_PORT}（网页端）
+#   与 http://<服务器IP>:${API_PORT}（接口），并把实际访问地址填入 LANDRIVE_CORS_ALLOW。
+
+name: lan-drive
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: lanfs-mysql
-    restart: unless-stopped
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-time-zone=+00:00
-      - --max-connections=200
-    environment:
-      MYSQL_ROOT_PASSWORD: "change-me-root-password"
-      MYSQL_DATABASE: "lanfs"
-      MYSQL_USER: "lanfs"
-      MYSQL_PASSWORD: "change-me-db-password"
-    volumes:
-      - mysql-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pchange-me-root-password"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 30s
-    # 数据库仅内网使用，不对外暴露端口。
-    expose:
-      - "3306"
-
-  app:
-    # 默认使用 CI 构建好的固定 tag 镜像；改为注释 image + 取消 build 注释即可从源码构建。
+  # ---------- 服务端接口 ----------
+  api:
     image: ghcr.io/sakana-1314/lan-drive:server
+    # 需要从源码构建时，注释掉 image，取消下面 build 的注释：
     # build:
     #   context: ./server
     #   dockerfile: Dockerfile
-    container_name: lanfs-api
+    container_name: lan-drive-api
     restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
     environment:
       LANDRIVE_LISTEN: ":8080"
-      LANDRIVE_MYSQL_DSN: "lanfs:change-me-db-password@tcp(mysql:3306)/lanfs"
+      # ★ 必填：指向 1Panel 中 MySQL 的连接串
+      LANDRIVE_MYSQL_DSN: ${LANDRIVE_MYSQL_DSN:?请在 .env 中填写 MySQL 连接串，例如 lanfs:密码@tcp(mysql:3306)/lanfs}
       LANDRIVE_AUTO_CREATE_DB: "true"
-      # 必填：至少 32 字符，建议用 `openssl rand -hex 32` 生成。
-      LANDRIVE_JWT_SECRET: "change-me-to-a-random-32-plus-char-secret"
+      # ★ 必填：登录凭据签名密钥，至少 32 位（openssl rand -hex 32）
+      LANDRIVE_JWT_SECRET: ${LANDRIVE_JWT_SECRET:?请在 .env 中填写至少 32 位的随机密钥}
+      # 首次启动（账号表为空）时创建管理员；之后修改此处不影响已有账号
+      LANDRIVE_ADMIN_EMPLOYEE_NO: ${LANDRIVE_ADMIN_EMPLOYEE_NO:-admin}
+      LANDRIVE_ADMIN_PASSWORD: ${LANDRIVE_ADMIN_PASSWORD:?请在 .env 中填写管理员初始密码}
+      LANDRIVE_ADMIN_NAME: ${LANDRIVE_ADMIN_NAME:-系统管理员}
+      # 文件存储根目录（容器内），对应下面的 file-data 卷
       LANDRIVE_DATA_DIR: "/data"
-      # 首次启动（users 表为空）时创建管理员；之后修改此处不影响已有账号。
-      LANDRIVE_ADMIN_EMPLOYEE_NO: "admin"
-      LANDRIVE_ADMIN_PASSWORD: "change-me-admin-password"
-      LANDRIVE_ADMIN_NAME: "系统管理员"
-      # ★ 必改：前端（公网）域名白名单，逗号分隔；这是跨域访问能否成功的关键。
-      LANDRIVE_CORS_ALLOW: "https://files.your-company.com"
-      # 若前面还有 Nginx 等反向代理，置 true 以正确记录客户端 IP。
-      LANDRIVE_TRUST_PROXY: "false"
-      LANDRIVE_LOG_KEEP_DAYS: "90"
-      TZ: "Asia/Shanghai"
+      # ★ 必填：允许访问接口的网页地址，即用户浏览器里打开的地址。
+      #   填错会导致跨域被拦截，用户看到「无法在此网络下使用，请更换网络再试！」
+      LANDRIVE_CORS_ALLOW: ${LANDRIVE_CORS_ALLOW:?请在 .env 中填写网页端访问地址，例如 https://files.example.com}
+      # 流量经过 1Panel 反向代理时为 true，以便正确记录客户端 IP
+      LANDRIVE_TRUST_PROXY: ${LANDRIVE_TRUST_PROXY:-true}
+      LANDRIVE_LOG_KEEP_DAYS: ${LANDRIVE_LOG_KEEP_DAYS:-90}
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - file-data:/data
     ports:
-      # 只绑定到内网网卡（示例 192.168.1.100），避免暴露到公网。
-      # 若服务器有多个网卡，把左侧改成具体内网 IP，例如 "192.168.1.100:8080:8080"。
-      - "8080:8080"
+      # 供 1Panel 反向代理访问；也可只绑定内网地址，如 "192.168.1.100:8080:8080"
+      - "${API_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
       interval: 30s
@@ -90,9 +69,47 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+    networks:
+      - 1panel-network
+
+  # ---------- 网页端 ----------
+  # 若网页端要单独部署到公网（接口仍留内网），删掉这一段，
+  # 改为在公网服务器上单独运行 web 镜像并设置 LANDRIVE_API_BASE_URL。
+  web:
+    image: ghcr.io/sakana-1314/lan-drive:web
+    container_name: lan-drive-web
+    restart: unless-stopped
+    depends_on:
+      # 接口地址由浏览器直接请求，网页端本身不依赖接口健康状态；
+      # 这里只保证启动顺序，避免同时重启时页面先于接口就绪。
+      - api
+    environment:
+      # 浏览器访问接口的地址（要带 /api，且必须是浏览器能访问到的地址）。
+      # 留空则使用镜像构建时注入的地址。
+      LANDRIVE_API_BASE_URL: ${LANDRIVE_API_BASE_URL:-}
+      LANDRIVE_API_PROBE_TIMEOUT: ${LANDRIVE_API_PROBE_TIMEOUT:-6000}
+    ports:
+      - "${WEB_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/config.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 1panel-network
 
 volumes:
-  mysql-data:
-    driver: local
+  # 上传的文件。数据库里只存相对路径，因此该卷必须与数据库一起备份。
   file-data:
     driver: local
+
+networks:
+  # 由 1Panel 创建，本编排只接入、不创建。
+  1panel-network:
+    external: true
