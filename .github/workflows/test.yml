@@ -149,8 +149,9 @@ jobs:
       - name: 生产构建
         working-directory: web
         env:
-          # CI 里演示构建期注入；实际部署可用运行时 /config.js 覆盖。
-          VITE_API_BASE_URL: "http://127.0.0.1:8080/api"
+          # 演示构建期 HOST 注入链路（后端域名，仅 origin）；
+          # 实际部署可用运行时 /config.js 覆盖。工作流公开可见，勿写真实内网域名。
+          HOST: "https://localhost"
         run: npm run build
 
       - name: 校验构建产物
@@ -161,6 +162,11 @@ jobs:
           # 需求指定的网络提示文案必须出现在产物中，否则说明前端漏掉了该逻辑。
           if ! grep -rq "无法在此网络下使用，请更换网络再试！" dist/assets/*.js; then
             echo "::error::构建产物中缺少网络不可用提示文案"
+            exit 1
+          fi
+          # 构建期 HOST 必须被注入为 <HOST>/api，否则前端会打到错误地址。
+          if ! grep -rq "https://localhost/api" dist/assets/*.js; then
+            echo "::error::构建期 HOST 未注入到产物（应生成 <HOST>/api）"
             exit 1
           fi
           echo "✅ 构建产物校验通过"

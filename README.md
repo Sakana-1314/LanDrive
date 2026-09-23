@@ -56,8 +56,8 @@
 │   ├── src/components/preview/    纯前端 Office/PDF 预览
 │   └── .env.example               API 地址与探测超时配置模板
 ├── docker-compose.yml             内网：API + MySQL
-├── scripts/smoke.sh               部署后端到端冒烟（51 项）
-├── docs/design.md                 设计说明与接口契约
+├── docs/scripts/smoke.sh          部署后端到端冒烟（51 项）
+├── docs/                        设计说明、接口契约与运维脚本
 └── Makefile
 ```
 
@@ -149,9 +149,16 @@ export LANDRIVE_CORS_ALLOW='https://files.your-company.com'
 `web` 镜像内置运行时注入：启动时用环境变量告诉它内网 API 地址即可，**同一个镜像可部署到任意环境**。
 
 ```bash
+# 直接用 CI 构建好的镜像（构建期已注入仓库变量 vars.API_HOST 指向的后端域名）
+docker run -d --name lanfs-web -p 80:80 ghcr.io/sakana-1314/lan-drive:web
+
+# 若镜像里的默认地址不对，用运行时变量覆盖（无需重新构建）
 docker run -d --name lanfs-web -p 80:80 \
-  -e LANDRIVE_API_BASE_URL='http://192.168.1.100:8080/api' \
+  -e LANDRIVE_API_BASE_URL='https://ipip-filrs.local.19890605.xyz/api' \
   ghcr.io/sakana-1314/lan-drive:web
+
+# 自己构建镜像时用 --build-arg HOST 指定后端域名
+docker build -f web/Dockerfile --build-arg HOST=https://ipip-filrs.local.19890605.xyz -t lan-drive-web web
 ```
 
 或写进 compose：
@@ -175,8 +182,13 @@ services:
 ```bash
 cd web
 cp .env.example .env.production
-# 编辑 .env.production：VITE_API_BASE_URL=http://192.168.1.100:8080/api
+# 编辑 .env.production，填后端域名（仅 origin，不带 /api）：
+#   HOST=https://ipip-filrs.local.19890605.xyz
 npm install && npm run build     # 产物在 web/dist/
+
+# 也可以不改文件，直接在命令前传：
+HOST=https://ipip-filrs.local.19890605.xyz npm run build
+
 # 把 dist/ 内容上传到 Nginx / OSS / CDN
 ```
 
@@ -242,7 +254,7 @@ make run
 cd web && npm install && npm run dev
 ```
 
-开发态用 `.env.development`（`VITE_API_BASE_URL=/api`）走 vite 代理，因此不需要配置 CORS。
+开发态走 vite 代理（`.env.development` 的 `VITE_DEV_API_TARGET`），因此既不需要配置 CORS，也不需要设置 `HOST`。
 
 常用命令：
 
@@ -281,9 +293,16 @@ make docker       # 构建 API 镜像
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `VITE_API_BASE_URL` | `/api` | 内网 API 地址（构建期注入）；公网部署必须设成完整地址 |
+| `HOST` | 空 | **后端域名**（仅 origin，不含 `/api`），构建期注入；留空则走同源 `/api` |
 | `VITE_API_PROBE_TIMEOUT` | `6000` | 连通性探测超时（毫秒），超时即判定当前网络不可用 |
 | `VITE_DEV_API_TARGET` | `http://127.0.0.1:8080` | 仅开发态：vite 代理目标 |
+
+前端构建示例：
+
+```bash
+HOST=https://ipip-filrs.local.19890605.xyz npm run build
+# 或写入 web/.env.production：HOST=https://ipip-filrs.local.19890605.xyz
+```
 
 系统策略（体积、类型、天数、分片、上传开关）在**管理端「系统配置」页面**在线修改，保存后立即生效。
 
@@ -361,7 +380,7 @@ make docker       # 构建 API 镜像
 BASE_URL=http://127.0.0.1:8080 \
 ADMIN_PW='你的管理员密码' \
 ORIGIN='https://files.your-company.com' \
-bash scripts/smoke.sh
+bash docs/scripts/smoke.sh
 ```
 
 单元测试（不依赖数据库）：
@@ -400,7 +419,7 @@ docker run --rm -v lan-file-data:/data -v "$PWD:/backup" alpine \
 ## 常见问题
 
 **前端页面能打开，但登录提示「无法在此网络下使用，请更换网络再试！」**
-说明当前网络访问不到内网 API。依次检查：① 是否连着公司网络/VPN；② `web/.env.production` 里的 `VITE_API_BASE_URL` 是否是内网可达地址（改完必须重新 `npm run build`）；③ 后端 `LANDRIVE_CORS_ALLOW` 是否包含前端域名（改完 `docker compose up -d app` 重启）。
+说明当前网络访问不到内网 API。依次检查：① 是否连着公司网络/VPN；② 前端构建时的 `HOST` 是否指向内网可达地址（改完必须重新 `npm run build`；用镜像则改 `LANDRIVE_API_BASE_URL` 并重启容器）；③ 后端 `LANDRIVE_CORS_ALLOW` 是否包含前端域名（改完 `docker compose up -d app` 重启）。
 
 **确认在公司网络、地址也对，还是提示网络不可用**
 多是跨域被拦截。用浏览器开发者工具的 Network 面板看预检请求；或按上文用 `curl -X OPTIONS` 验证 `Access-Control-Allow-Origin`。注意 `LANDRIVE_CORS_ALLOW` 要写完整来源（`https://` 开头，不带结尾斜杠和路径）。
