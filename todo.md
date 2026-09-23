@@ -4,7 +4,7 @@
 
 ## Now
 
-（全部完成 —— 已发布至 GitHub，CI 自动测试与 ghcr 镜像构建全绿）
+（全部完成 —— 代码、镜像、文档站均已发布；CI 全绿）
 
 ## Next
 
@@ -15,6 +15,28 @@
 （无）
 
 ## Log
+
+- **2026-09-23 P12 修复构建/测试报错、精简 README、新增 VitePress 文档站**
+  1. **修复构建与测试报错（全新克隆必现）**：`make check` / `make test` 里的 `npx vue-tsc`
+     在**未安装依赖**时会去远端拉取任意版本的 vue-tsc，与项目锁定的 typescript 不兼容，
+     报 `ERR_PACKAGE_PATH_NOT_EXPORTED: Package subpath './lib/tsc'` 而失败。
+     用全新 `git clone` 复现后，改为「依赖 `webinstall` + `npm run typecheck`」走本地依赖。
+     顺带发现本环境 `NODE_ENV=production` 会让 npm 跳过 devDependencies（VitePress 装不上），
+     已在 Makefile / 文档 / 工作流中统一补 `--include=dev`。
+  2. **README 精简**：只保留功能介绍与文档站入口，删掉实际用途描述与技术细节。
+  3. **新增 `docs/websites/` 文档站（VitePress）**：16 个页面 —— 入门（这是什么/功能一览/
+     部署/前后端分离部署/常见问题）、使用教程（登录/浏览与下载/上传/在线预览/个人设置）、
+     管理员（统计看板/用户/设置/文件与回收站/日志）。面向使用者、口语化，部署拓扑与文件
+     生命周期用 mermaid 画。新增 `make docs` / `docsdev` / `docsinstall`。
+  4. **新增 `website.yml`**：PR 只构建校验（含 1318 个链接/资源的硬校验），push `main`
+     构建后发布到 `gh-pages`，由 GitHub Pages 提供服务。已启用 Pages。
+  5. **修正仓库名大小写**：GitHub 建仓时把仓库名存成了 `LanDrive`，而 GitHub Pages 路径
+     **区分大小写**，会导致站点 base 与线上地址 404。已把仓库重命名为 `lan-drive`，
+     仓库内全部引用（VitePress `base`、badges、文档链接、工作流校验前缀）统一为小写，
+     AGENTS.md 增加「base 必须与仓库路径大小写一致」的规则。
+  6. **验证**：文档站已上线 <https://sakana-1314.github.io/lan-drive/>，
+     16 个页面全部 200，静态资源与本地搜索索引（112 条文档）正常；
+     `测试通过` 与 `构建并发布文档站` 在 main 上全绿；全新克隆 `make check` 通过。
 
 - **2026-09-23 P11 发布到 GitHub 并接入 CI/CD**
   1. **命名**：仓库定为 **lan-drive**（镜像 `ghcr.io/sakana-1314/lan-drive`），
