@@ -1,25 +1,27 @@
 # 局域网文件助手 —— 前端镜像（部署在公网）
 #
-# 一个镜像通吃所有环境：VITE_API_BASE_URL 虽是构建期变量，但镜像内置了
-# docker-entrypoint.d 生成 /config.js 的脚本，容器启动时用环境变量
+# 构建期可通过 --build-arg HOST=<后端域名> 注入后端地址；
+# 镜像同时内置 docker-entrypoint.d 生成 /config.js 的脚本，容器启动时可用
 # LANDRIVE_API_BASE_URL 覆盖，因此**同一个 tag 可部署到不同内网地址**，
 # 无需为每个环境重新构建镜像。
 #
-# 构建（在仓库根目录执行）：
+# 构建（构建上下文为 web/ 目录）：
 #   docker build -f web/Dockerfile -t lan-drive-web:1.0.0 web
+#   docker build -f web/Dockerfile --build-arg HOST=https://ipip-filrs.local.19890605.xyz -t lan-drive-web:1.0.0 web
 #
-# 运行：
+# 运行（不传 LANDRIVE_API_BASE_URL 时用构建期注入的 HOST）：
 #   docker run -d -p 80:80 \
-#     -e LANDRIVE_API_BASE_URL='http://192.168.1.100:8080/api' \
+#     -e LANDRIVE_API_BASE_URL='https://ipip-filrs.local.19890605.xyz/api' \
 #     lan-drive-web:1.0.0
 
 # ---------- 构建阶段 ----------
 FROM node:22-alpine AS build
 WORKDIR /app
 
-# 镜像内置的默认 API 地址（可被运行时环境变量覆盖）。留空则回退同源 /api。
-ARG VITE_API_BASE_URL=""
-ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+# 后端域名（仅 origin，不含 /api）。留空则前端走同源 /api。
+# 例：--build-arg HOST=https://ipip-filrs.local.19890605.xyz
+ARG HOST=""
+ENV HOST=${HOST}
 ARG VITE_API_PROBE_TIMEOUT="6000"
 ENV VITE_API_PROBE_TIMEOUT=${VITE_API_PROBE_TIMEOUT}
 

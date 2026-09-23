@@ -86,11 +86,12 @@ build-linux-arm64:
 webinstall:
 	cd $(WEB) && npm install --include=dev --no-fund --no-audit
 
-## 构建前端静态站点。部署前请按 web/.env.example 配置 VITE_API_BASE_URL 指向内网 API。
+## 构建前端静态站点。部署前请传 HOST=<后端域名>（或写入 web/.env.production）指向内网 API。
 web: webinstall
 	cd $(WEB) && npm run build
 	@echo "✅ 前端已构建：$(WEB)/dist（部署时把该目录内容放到公网静态托管）"
 	@echo "   提醒：后端 LANDRIVE_CORS_ALLOW 必须包含前端访问域名，否则跨域会被拦截。"
+	@echo "   提示：用 HOST=https://<后端域名> make web 可在构建期注入接口地址。"
 
 ## 前端开发服务器（vite，代理 /api 到本机 :8080）
 webdev:

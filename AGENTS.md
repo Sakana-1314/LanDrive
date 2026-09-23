@@ -10,7 +10,7 @@
 | `web/` | Vue 3 + TS + Vite + Naive UI 前端（**部署在公网**静态托管） |
 | `.github/workflows/` | CI/CD 工作流 |
 | `docs/design.md` | 设计与接口契约，**实现以它为准** |
-| `scripts/smoke.sh` | 部署后端到端冒烟脚本 |
+| `docs/scripts/smoke.sh` | 部署后端到端冒烟脚本 |
 
 **部署拓扑是硬约束**：前端在公网、API 在内网，两者跨域通信。任何改动都不得破坏这条边界，
 也不得让后端承担托管页面的职责（`server` 不内嵌前端产物）。
@@ -47,7 +47,7 @@
 
 - **技术栈固定**：Vue 3 + TypeScript + Vite + Vue Router + Naive UI；状态用 `reactive` 单例（`src/stores/`），**不引入 Pinia**；时间筛选与图标不引入 date-fns / 额外图标库（用 `@vicons/ionicons5`）。
 - **接口层单点**：所有请求经 `src/api/index.ts` 的 axios 实例；类型定义在 `src/api/types.ts` 并与 `docs/design.md` 同步。**禁止在组件里直接 `fetch`/`axios`。**
-- **API 地址**：优先级为「运行时 `/config.js` → 构建期 `VITE_API_BASE_URL` → 同源 `/api`」，解析逻辑只在 `src/api/index.ts` 的 `resolveApiBaseUrl` 里。容器部署用环境变量 `LANDRIVE_API_BASE_URL` 在启动时注入，**不要为了换地址重新构建镜像**。
+- **API 地址**：优先级为「运行时 `/config.js` → 构建期 `HOST`（`__API_HOST__`，拼成 `${HOST}/api`）→ 同源 `/api`」，解析逻辑只在 `src/api/index.ts` 的 `resolveApiBaseUrl` 里。`HOST` 是**构建期**环境变量（仅 origin，不含 `/api`），与同组织其它前端项目保持一致；容器部署还可用运行时 `LANDRIVE_API_BASE_URL` 覆盖，**不要为了换地址重新构建镜像**。
 - **网络判定**：区分「请求未到达服务器」（超时/连接失败/被 CORS 拦截 → 提示更换网络）与「有响应但业务失败」（按业务提示）。判定逻辑只在 `src/api/network.ts`。**绝不能把网络不可达显示成"密码错误"。**
 - **上传**：走 `src/utils/upload.ts` 的 `UploadManager`（分片并发、断点续传、重试）；分片大小必须服从服务端 `init` 返回的 `chunk_size`，前端不得自行决定。
 - **预览**：预览库一律 `defineAsyncComponent` + 动态 `import()`，**主包不得引入 docx-preview / exceljs / pptx-preview**；新增预览类型时同步 `previewKind`（server）与预览矩阵表（`docs/design.md`）。
@@ -62,6 +62,6 @@
   - `ghcr.io/sakana-1314/lan-drive:server`（内网 API）
   - `ghcr.io/sakana-1314/lan-drive:web`（公网前端）
   
-  同时打时间戳 tag（`server-YYYYMMDD-HHMMSS`）便于回滚。按变更路径只构建改动过的镜像；手动触发时两个都构建。
+  同时打时间戳 tag（`server-YYYYMMDD-HHMMSS`）便于回滚。按变更路径只构建改动过的镜像；手动触发时两个都构建。web 镜像通过 `--build-arg HOST=${{ vars.API_HOST }}` 注入后端域名，**域名只允许来自仓库变量 `vars.API_HOST`，禁止写进工作流文件**。
 - **镜像要求**：`server` 镜像只含二进制（多阶段构建、非 root、内置 HEALTHCHECK）；`web` 镜像为 nginx + 静态产物 + `docker-entrypoint.d` 运行时注入脚本。两个镜像都不得硬编码内网地址或密钥。
 - **安全红线**：工作流文件公开可见，**严禁硬编码 IP、密钥、内网域名**，一律 `${{ secrets.* }}` / `${{ vars.* }}` 引用；`GITHUB_TOKEN` 只申请必需的权限（`contents: read`、推送镜像时加 `packages: write`）。

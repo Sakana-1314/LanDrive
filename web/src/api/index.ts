@@ -1,7 +1,7 @@
 // axios 实例与全部接口封装。
 //
 // 部署形态：前端在**公网**，后端 API 在**内网**，两者不同源。
-//   - API 基址来自 VITE_API_BASE_URL（见 .env.example）；
+//   - API 基址来自构建期 HOST（见 .env.example），也可用运行时 /config.js 覆盖；
 //   - 网络不可达时统一抛出带 networkUnavailable 标记的错误，
 //     由调用方提示「无法在此网络下使用，请更换网络再试！」；
 //   - 401 由拦截器统一跳转登录页。
@@ -42,14 +42,18 @@ declare global {
 
 /**
  * 解析 API 基址，优先级：
- *   1. 运行时 /config.js（容器启动时注入，同一个镜像可部署到不同内网地址）
- *   2. 构建期 VITE_API_BASE_URL
- *   3. 同源 /api（适用于用反向代理把 /api 转发到内网的部署方式）
+ *   1. 运行时 /config.js —— 容器启动时注入，同一个镜像可部署到不同内网地址
+ *   2. 构建期 HOST —— 后端域名（vite define 注入的 __API_HOST__，仅 origin，不含 /api）
+ *   3. 同源 /api —— 适用于用反向代理把 /api 转发到内网的部署方式
  */
 function resolveApiBaseUrl(): string {
   const runtime = typeof window !== 'undefined' ? window.__LANDRIVE_CONFIG__?.apiBaseUrl : undefined
-  const raw = (runtime || import.meta.env.VITE_API_BASE_URL || '/api').trim()
-  return raw.replace(/\/+$/, '')
+  if (runtime && runtime.trim()) return runtime.trim().replace(/\/+$/, '')
+
+  // __API_HOST__ 由 vite.config.ts 从构建期环境变量 HOST 注入。
+  if (__API_HOST__) return `${__API_HOST__}/api`
+
+  return '/api'
 }
 
 /** API 基址。 */
@@ -58,7 +62,7 @@ export const API_BASE_URL: string = resolveApiBaseUrl()
 /** 连通性探测超时（毫秒）。 */
 const PROBE_TIMEOUT = Number(
   (typeof window !== 'undefined' ? window.__LANDRIVE_CONFIG__?.probeTimeout : undefined) ||
-    import.meta.env.VITE_API_PROBE_TIMEOUT ||
+    __API_PROBE_TIMEOUT__ ||
     6000
 )
 
