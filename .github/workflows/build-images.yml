@@ -1,0 +1,179 @@
+name: 构建并推送镜像
+
+# 构建 web / server 两个镜像并推送到 GitHub Container Registry（ghcr.io）。
+#
+# 固定 tag（不随版本变化，部署脚本可长期引用）：
+#   ghcr.io/sakana-1314/lan-drive:web
+#   ghcr.io/sakana-1314/lan-drive:server
+# 同时打上带时间戳的 tag（如 web-20260923-031500）便于回溯与回滚。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "web/**"
+      - ".github/workflows/build-images.yml"
+  workflow_dispatch:
+    inputs:
+      push_latest:
+        description: "是否额外推送带时间戳的相对 tag"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # ghcr 的镜像路径必须全小写。
+  IMAGE: ${{ github.repository_owner }}/lan-drive
+
+jobs:
+  # ---------- 变更检测：只构建改动过的组件 ----------
+  detect:
+    name: 变更检测
+    runs-on: ubuntu-24.04
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 判断变更目录
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            server:
+              - 'server/**'
+              - '.github/workflows/build-images.yml'
+            web:
+              - 'web/**'
+              - '.github/workflows/build-images.yml'
+
+  # ---------- server 镜像（内网 API） ----------
+  build-server:
+    name: 构建 server 镜像
+    needs: detect
+    # 手动触发时无视路径过滤，两个镜像都构建。
+    if: needs.detect.outputs.server == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成时间戳 tag
+        id: stamp
+        run: echo "value=$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
+
+      - name: 构建并推送 server 镜像（固定 tag）
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          # 内网服务器多为 amd64；需要 arm64 时在此追加 linux/arm64。
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ github.sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:server
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:server-${{ steps.stamp.outputs.value }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+          provenance: false
+          sbom: false
+
+      - name: 输出镜像信息
+        run: |
+          echo "### server 镜像已推送" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ env.REGISTRY }}/${{ env.IMAGE }}:server" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ env.REGISTRY }}/${{ env.IMAGE }}:server-${{ steps.stamp.outputs.value }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------- web 镜像（公网前端） ----------
+  build-web:
+    name: 构建 web 镜像
+    needs: detect
+    if: needs.detect.outputs.web == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成时间戳 tag
+        id: stamp
+        run: echo "value=$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
+
+      - name: 构建并推送 web 镜像（固定 tag）
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          platforms: linux/amd64
+          push: true
+          # 不传 VITE_API_BASE_URL：镜像保持"地址无关"，
+          # 部署时通过 LANDRIVE_API_BASE_URL 环境变量在容器启动时注入。
+          build-args: |
+            VITE_API_PROBE_TIMEOUT=6000
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:web
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:web-${{ steps.stamp.outputs.value }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+          provenance: false
+          sbom: false
+
+      - name: 输出镜像信息
+        run: |
+          echo "### web 镜像已推送" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ env.REGISTRY }}/${{ env.IMAGE }}:web" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ env.REGISTRY }}/${{ env.IMAGE }}:web-${{ steps.stamp.outputs.value }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------- 汇总 ----------
+  build-summary:
+    name: 镜像构建完成
+    needs: [build-server, build-web]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 校验构建结果
+        run: |
+          echo "server：${{ needs.build-server.result }}"
+          echo "web：${{ needs.build-web.result }}"
+          for r in "${{ needs.build-server.result }}" "${{ needs.build-web.result }}"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::镜像构建未成功（$r）"; exit 1 ;;
+            esac
+          done
+          echo "✅ 镜像构建全部完成"

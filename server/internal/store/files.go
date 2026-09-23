@@ -1,0 +1,439 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"strings"
+	"time"
+
+	"lan-drive/internal/model"
+)
+
+const fileCols = `f.id, f.owner_id, f.original_name, f.ext, f.size_bytes, f.mime, f.sha256,
+	f.rel_path, f.status, f.expires_at, f.deleted_at, f.purge_at, f.created_at, f.updated_at,
+	u.name, u.employee_no`
+
+func scanFile(sc interface {
+	Scan(dest ...any) error
+}) (*model.File, error) {
+	var f model.File
+	var deleted, purge sql.NullTime
+	if err := sc.Scan(&f.ID, &f.OwnerID, &f.OriginalNam, &f.Ext, &f.SizeBytes, &f.Mime, &f.SHA256,
+		&f.RelPath, &f.Status, &f.ExpiresAt, &deleted, &purge, &f.CreatedAt, &f.UpdatedAt,
+		&f.OwnerName, &f.OwnerEmployeeNo); err != nil {
+		return nil, err
+	}
+	f.ExpiresAt = f.ExpiresAt.UTC()
+	f.CreatedAt = f.CreatedAt.UTC()
+	f.UpdatedAt = f.UpdatedAt.UTC()
+	f.DeletedAt = nullTime(deleted)
+	f.PurgeAt = nullTime(purge)
+	return &f, nil
+}
+
+// CreateFile 插入一条文件记录（调用方必须先成功落盘）。
+func (s *Store) CreateFile(ctx context.Context, f *model.File) error {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO files (owner_id, original_name, ext, size_bytes, mime, sha256, rel_path,
+			status, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.OwnerID, f.OriginalNam, f.Ext, f.SizeBytes, f.Mime, f.SHA256, f.RelPath,
+		f.Status, f.ExpiresAt.UTC())
+	if err != nil {
+		if isDuplicate(err) {
+			return ErrConflict
+		}
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	f.ID = id
+	return nil
+}
+
+// GetFile 按主键查询文件（含属主姓名/工号）。
+func (s *Store) GetFile(ctx context.Context, id int64) (*model.File, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+fileCols+` FROM files f JOIN users u ON u.id = f.owner_id WHERE f.id = ?`, id)
+	f, err := scanFile(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	return f, err
+}
+
+// FileQuery 描述文件列表的检索条件。
+type FileQuery struct {
+	OwnerID  int64  // 0 表示不限
+	Status   string // active / trashed / all
+	Keyword  string // 匹配文件名或属主姓名/工号
+	Ext      string // 精确匹配扩展名（小写带点）
+	Page     int
+	PageSize int
+	Sort     string // created_at / size_bytes / expires_at / original_name / owner
+	Order    string // asc / desc
+}
+
+// sortColumn 把前端排序键映射到白名单列，杜绝 SQL 注入。
+func (q FileQuery) sortColumn() string {
+	switch q.Sort {
+	case "size_bytes":
+		return "f.size_bytes"
+	case "expires_at":
+		return "f.expires_at"
+	case "original_name":
+		return "f.original_name"
+	case "owner":
+		return "u.name"
+	case "created_at":
+		fallthrough
+	default:
+		return "f.created_at"
+	}
+}
+
+func (q FileQuery) order() string {
+	if strings.EqualFold(q.Order, "asc") {
+		return "ASC"
+	}
+	return "DESC"
+}
+
+func (q FileQuery) conditions() (string, []any) {
+	conds := []string{"1=1"}
+	args := []any{}
+	switch q.Status {
+	case model.StatusActive:
+		conds = append(conds, "f.status = ?")
+		args = append(args, model.StatusActive)
+	case model.StatusTrashed:
+		conds = append(conds, "f.status = ?")
+		args = append(args, model.StatusTrashed)
+	case "all", "":
+		// 不限状态
+	default:
+		conds = append(conds, "f.status = ?")
+		args = append(args, model.StatusActive)
+	}
+	if q.OwnerID > 0 {
+		conds = append(conds, "f.owner_id = ?")
+		args = append(args, q.OwnerID)
+	}
+	if kw := strings.TrimSpace(q.Keyword); kw != "" {
+		like := "%" + escapeLike(kw) + "%"
+		conds = append(conds, "(f.original_name LIKE ? OR u.name LIKE ? OR u.employee_no LIKE ?)")
+		args = append(args, like, like, like)
+	}
+	if ext := strings.TrimSpace(q.Ext); ext != "" {
+		conds = append(conds, "f.ext = ?")
+		args = append(args, strings.ToLower(ext))
+	}
+	return strings.Join(conds, " AND "), args
+}
+
+// ListFiles 分页查询文件。
+func (s *Store) ListFiles(ctx context.Context, q FileQuery) ([]model.File, int64, error) {
+	where, args := q.conditions()
+
+	var total int64
+	countSQL := `SELECT COUNT(*) FROM files f JOIN users u ON u.id = f.owner_id WHERE ` + where
+	if err := s.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	sqlText := `SELECT ` + fileCols + ` FROM files f JOIN users u ON u.id = f.owner_id
+		WHERE ` + where + ` ORDER BY ` + q.sortColumn() + ` ` + q.order() + `, f.id DESC LIMIT ? OFFSET ?`
+	listArgs := append(append([]any{}, args...), q.PageSize, (q.Page-1)*q.PageSize)
+
+	rows, err := s.db.QueryContext(ctx, sqlText, listArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := make([]model.File, 0, q.PageSize)
+	for rows.Next() {
+		f, err := scanFile(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, *f)
+	}
+	return out, total, rows.Err()
+}
+
+// FileExtStat 某个扩展名的文件数与占用。
+type FileExtStat struct {
+	Ext       string `json:"ext"`
+	FileCount int64  `json:"file_count"`
+	Bytes     int64  `json:"bytes"`
+}
+
+// ListExtStats 统计 active 文件的扩展名分布（管理端用）。
+func (s *Store) ListExtStats(ctx context.Context, limit int) ([]FileExtStat, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT ext, COUNT(*), COALESCE(SUM(size_bytes),0) FROM files
+		 WHERE status = ? GROUP BY ext ORDER BY COUNT(*) DESC LIMIT ?`, model.StatusActive, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FileExtStat{}
+	for rows.Next() {
+		var e FileExtStat
+		if err := rows.Scan(&e.Ext, &e.FileCount, &e.Bytes); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// FinishFile 在合并写盘成功后写入最终元数据（最终相对路径、sha256、实际大小）。
+//
+// 上传流程先用占位 rel_path 取得主键（磁盘文件名 = 主键 + 扩展名），
+// 合并完成后调用本方法把占位路径替换为最终路径。
+func (s *Store) FinishFile(ctx context.Context, id int64, relPath, sha256 string, size int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE files SET rel_path = ?, sha256 = ?, size_bytes = ? WHERE id = ?`,
+		relPath, sha256, size, id)
+	if err != nil {
+		if isDuplicate(err) {
+			return ErrConflict
+		}
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, gerr := s.GetFile(ctx, id); gerr != nil {
+			return gerr
+		}
+	}
+	return nil
+}
+
+// RenameFile 重命名（仅改数据库中的原始文件名，磁盘名不变）。
+func (s *Store) RenameFile(ctx context.Context, id int64, name string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE files SET original_name = ? WHERE id = ? AND status = ?`,
+		name, id, model.StatusActive)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// ClientFoundRows 语义下，行存在但值未变也算 matched；再查一次以区分「不存在」。
+		if _, gerr := s.GetFile(ctx, id); gerr != nil {
+			return gerr
+		}
+	}
+	return nil
+}
+
+// MarkTrashed 把文件置为回收站状态（软删除）。
+func (s *Store) MarkTrashed(ctx context.Context, id int64, deletedAt, purgeAt time.Time) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE files SET status = ?, deleted_at = ?, purge_at = ? WHERE id = ? AND status = ?`,
+		model.StatusTrashed, deletedAt.UTC(), purgeAt.UTC(), id, model.StatusActive)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, gerr := s.GetFile(ctx, id); gerr != nil {
+			return gerr
+		}
+		return ErrState
+	}
+	return nil
+}
+
+// RestoreFile 从回收站恢复，重算到期时间。
+func (s *Store) RestoreFile(ctx context.Context, id int64, expiresAt time.Time) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE files SET status = ?, deleted_at = NULL, purge_at = NULL, expires_at = ?
+		 WHERE id = ? AND status = ?`,
+		model.StatusActive, expiresAt.UTC(), id, model.StatusTrashed)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, gerr := s.GetFile(ctx, id); gerr != nil {
+			return gerr
+		}
+		return ErrState
+	}
+	return nil
+}
+
+// DeleteFile 物理删除数据库记录，返回其相对路径（调用方已负责删磁盘文件）。
+func (s *Store) DeleteFile(ctx context.Context, id int64) (string, error) {
+	f, err := s.GetFile(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE id = ?`, id); err != nil {
+		return "", err
+	}
+	return f.RelPath, nil
+}
+
+// DeleteFileRow 只删除数据库记录（用于清理时磁盘文件已不存在的情况）。
+func (s *Store) DeleteFileRow(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE id = ?`, id)
+	return err
+}
+
+// ExpireFiles 把到期的 active 文件批量置为回收站状态，返回受影响记录。
+func (s *Store) ExpireFiles(ctx context.Context, now time.Time, trashDays int) ([]model.File, error) {
+	// 先查出待处理记录，便于逐个计算 purge_at 并记录日志。
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+fileCols+` FROM files f JOIN users u ON u.id = f.owner_id
+		 WHERE f.status = ? AND f.expires_at <= ?`, model.StatusActive, now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	var list []model.File
+	for rows.Next() {
+		f, err := scanFile(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		list = append(list, *f)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	purgeAt := now.UTC().AddDate(0, 0, trashDays)
+	done := make([]model.File, 0, len(list))
+	for _, f := range list {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE files SET status = ?, deleted_at = ?, purge_at = ?
+			 WHERE id = ? AND status = ?`,
+			model.StatusTrashed, now.UTC(), purgeAt, f.ID, model.StatusActive)
+		if err != nil {
+			return done, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			done = append(done, f)
+		}
+	}
+	return done, nil
+}
+
+// ListPurgeable 返回已到物理删除时刻的回收站文件。
+func (s *Store) ListPurgeable(ctx context.Context, now time.Time, limit int) ([]model.File, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+fileCols+` FROM files f JOIN users u ON u.id = f.owner_id
+		 WHERE f.status = ? AND f.purge_at IS NOT NULL AND f.purge_at <= ?
+		 ORDER BY f.id ASC LIMIT ?`, model.StatusTrashed, now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.File
+	for rows.Next() {
+		f, err := scanFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
+
+// ListFilesByOwner 返回某用户的全部文件（不限状态，用于删账号时清理磁盘）。
+func (s *Store) ListFilesByOwner(ctx context.Context, ownerID int64) ([]model.File, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+fileCols+` FROM files f JOIN users u ON u.id = f.owner_id WHERE f.owner_id = ?`,
+		ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.File
+	for rows.Next() {
+		f, err := scanFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
+
+// CountFilesByOwner 统计某用户的全部文件数（用于删除账号前的 409 提示）。
+func (s *Store) CountFilesByOwner(ctx context.Context, ownerID int64) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE owner_id = ?`, ownerID).Scan(&n)
+	return n, err
+}
+
+// AllRelPaths 返回所有文件的相对路径（一致性扫描用）。
+func (s *Store) AllRelPaths(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, rel_path FROM files`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var id int64
+		var p string
+		if err := rows.Scan(&id, &p); err != nil {
+			return nil, err
+		}
+		out[p] = id
+	}
+	return out, rows.Err()
+}
+
+// Stats 汇总管理端看板数据。
+func (s *Store) Stats(ctx context.Context, now time.Time) (model.Stats, error) {
+	var st model.Stats
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM users),
+			(SELECT COUNT(*) FROM files WHERE status = ?),
+			(SELECT COUNT(*) FROM files WHERE status = ?),
+			(SELECT COALESCE(SUM(size_bytes),0) FROM files WHERE status = ?),
+			(SELECT COALESCE(SUM(size_bytes),0) FROM files WHERE status = ?),
+			(SELECT COUNT(*) FROM files WHERE status = ? AND expires_at <= ? AND expires_at > ?),
+			(SELECT COUNT(*) FROM upload_sessions WHERE status = ?),
+			(SELECT COUNT(*) FROM files WHERE status = ? AND purge_at IS NOT NULL AND purge_at <= ?)`,
+		model.StatusActive, model.StatusTrashed,
+		model.StatusActive, model.StatusTrashed,
+		model.StatusActive, now.UTC().AddDate(0, 0, 7), now.UTC(),
+		model.UploadUploading,
+		model.StatusTrashed, now.UTC(),
+	).Scan(&st.Users, &st.Files, &st.Trashed, &st.TotalBytes, &st.TrashedBytes,
+		&st.Expiring7d, &st.UploadsInProgress, &st.ExpiredNotPurged)
+	return st, err
+}
+
+// UsedBytesByOwner 返回某用户 active 文件占用（新文件入库前的配额参考，当前未启用硬配额）。
+func (s *Store) UsedBytesByOwner(ctx context.Context, ownerID int64) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(size_bytes),0) FROM files WHERE owner_id = ? AND status = ?`,
+		ownerID, model.StatusActive).Scan(&n)
+	return n, err
+}

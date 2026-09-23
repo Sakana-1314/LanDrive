@@ -1,0 +1,23 @@
+# 构建产物
+/bin/
+web/dist/
+server/bin/
+
+# 依赖
+node_modules/
+web/node_modules/
+
+# 前端环境变量（含内网地址，按环境自行保留）
+web/.env.local
+web/.env.production.local
+.env
+.env.local
+
+# 运行数据（文件存储根目录）
+/data/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.log

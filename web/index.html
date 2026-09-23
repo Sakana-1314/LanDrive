@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>局域网文件助手</title>
+    <!--
+      运行时配置：容器部署时由 nginx 的 docker-entrypoint.d 脚本生成，
+      用于在不重新构建镜像的前提下切换内网 API 地址。
+      静态托管部署时该文件不存在也无妨（onerror 静默忽略，回退构建期变量）。
+    -->
+    <script src="/config.js" onerror="void 0"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

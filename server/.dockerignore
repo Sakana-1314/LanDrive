@@ -1,0 +1,5 @@
+# 构建上下文为 server/：排除测试与本地产物，缩小上下文体积。
+bin/
+*.test
+*.out
+coverage.out

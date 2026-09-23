@@ -1,0 +1,195 @@
+name: 测试
+
+# 自动测试：PR 与 push 都跑。
+#   server/** → gofmt / go vet / 单元测试 / MySQL 集成测试
+#   web/**    → 类型检查 / 网络判定单测 / 生产构建
+# 变更路径过滤，未改动的部分跳过，不浪费 Runner 时间。
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "server/**"
+      - "web/**"
+      - ".github/workflows/test.yml"
+  pull_request:
+    paths:
+      - "server/**"
+      - "web/**"
+      - ".github/workflows/test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------- 变更检测：按目录过滤 ----------
+  detect:
+    name: 变更检测
+    runs-on: ubuntu-24.04
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 判断变更目录
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            server:
+              - 'server/**'
+              - '.github/workflows/test.yml'
+            web:
+              - 'web/**'
+              - '.github/workflows/test.yml'
+
+  # ---------- 后端 ----------
+  server-test:
+    name: 后端测试（Go）
+    needs: detect
+    if: needs.detect.outputs.server == 'true'
+    runs-on: ubuntu-24.04
+
+    # 集成测试需要真实 MySQL：验证迁移、仓储、15 天到期 → 7 天回收站的完整生命周期。
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: lanfs_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: 代码格式检查
+        working-directory: server
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未通过 gofmt，请执行 gofmt -w："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: 静态检查（go vet）
+        working-directory: server
+        run: go vet ./...
+
+      - name: 单元测试（不依赖数据库）
+        working-directory: server
+        run: go test ./... -count=1 -coverprofile=coverage.out
+
+      - name: 集成测试（真实 MySQL）
+        working-directory: server
+        env:
+          # 集成测试会在该库中建表并清空业务表，使用独立测试库。
+          LANDRIVE_TEST_MYSQL_DSN: "root:root@tcp(127.0.0.1:3306)/lanfs_test"
+        run: go test ./internal/store/ ./internal/maintain/ -count=1 -v
+
+      - name: 覆盖率摘要
+        if: always()
+        working-directory: server
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: 编译产物
+        working-directory: server
+        run: |
+          CGO_ENABLED=0 go build -tags nomsgpack -buildvcs=false -trimpath \
+            -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" \
+            -o /tmp/landrive ./cmd/landrive
+          /tmp/landrive -version
+
+  # ---------- 前端 ----------
+  web-test:
+    name: 前端测试（Vue 3）
+    needs: detect
+    if: needs.detect.outputs.web == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装依赖
+        working-directory: web
+        run: npm ci --include=dev --no-fund --no-audit
+
+      - name: 类型检查（vue-tsc）
+        working-directory: web
+        run: npm run typecheck
+
+      - name: 单元测试（网络可用性判定）
+        working-directory: web
+        run: npm test
+
+      - name: 生产构建
+        working-directory: web
+        env:
+          # CI 里演示构建期注入；实际部署可用运行时 /config.js 覆盖。
+          VITE_API_BASE_URL: "http://127.0.0.1:8080/api"
+        run: npm run build
+
+      - name: 校验构建产物
+        working-directory: web
+        run: |
+          test -f dist/index.html || { echo "::error::缺少 dist/index.html"; exit 1; }
+          test -f dist/config.js || { echo "::error::缺少运行时配置文件 dist/config.js"; exit 1; }
+          # 需求指定的网络提示文案必须出现在产物中，否则说明前端漏掉了该逻辑。
+          if ! grep -rq "无法在此网络下使用，请更换网络再试！" dist/assets/*.js; then
+            echo "::error::构建产物中缺少网络不可用提示文案"
+            exit 1
+          fi
+          echo "✅ 构建产物校验通过"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 7
+
+  # ---------- 汇总门禁：作为分支保护要检查的那个 job ----------
+  test-summary:
+    name: 测试通过
+    needs: [server-test, web-test]
+    # 即使某个子任务被路径过滤跳过，也要给出一个稳定的成功状态。
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 校验各子任务结果
+        run: |
+          echo "后端：${{ needs.server-test.result }}"
+          echo "前端：${{ needs.web-test.result }}"
+          for r in "${{ needs.server-test.result }}" "${{ needs.web-test.result }}"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::测试未通过（$r）"; exit 1 ;;
+            esac
+          done
+          echo "✅ 全部测试通过"

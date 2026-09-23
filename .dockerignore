@@ -1,0 +1,12 @@
+# 构建上下文排除项（server/Dockerfile 只需要 server/ 目录）
+.git
+.gitignore
+bin/
+data/
+**/node_modules
+web/dist
+web/node_modules
+docs/
+*.log
+.env
+.DS_Store
