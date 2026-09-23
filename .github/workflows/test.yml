@@ -158,10 +158,12 @@ jobs:
 
       # 响应式布局只能在真实浏览器里验证：缺 border-box、grid 子项被内容撑宽
       # 这类问题在单测与类型检查里都发现不了（曾因此让登录卡在窄屏溢出）。
+      # 本地安装（--no-save 不改 package.json）：全局装的话 import('playwright')
+      # 解析不到，脚本会走"跳过"分支，CI 就会在没检查的情况下报绿（已踩过）。
       - name: 安装 Playwright 浏览器
         working-directory: web
         run: |
-          npm i -g playwright@1.49.0 --no-fund --no-audit
+          npm i playwright@1.49.0 --no-save --no-fund --no-audit
           npx playwright install --with-deps chromium
 
       - name: 生产构建
@@ -179,6 +181,9 @@ jobs:
       # 脚本自带 mock 后端与 dev server，并在内部强制校验 /api/health 可达。
       - name: 响应式布局检查（多视口无横向溢出）
         working-directory: web
+        env:
+          # 强制必须真的执行：缺少 playwright 时失败而不是跳过
+          REQUIRE_PLAYWRIGHT: "1"
         run: npm run test:responsive
 
       - name: 校验构建产物

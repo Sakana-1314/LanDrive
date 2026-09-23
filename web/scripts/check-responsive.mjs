@@ -16,19 +16,26 @@
 // 于是「内页布局」实际没被检查到（只测了登录页）。所以这里强制要求
 // /api/health 可达；接口不可用时直接失败，而不是给出一个假的绿色结果。
 //
-// 说明：需要 playwright（未写入 package.json —— 它体积大且只是校验工具）。
-// 未安装时**跳过并提示**而不是失败，避免在没装浏览器的环境里卡住。
-// 本地/CI 安装方式：npm i -g playwright && npx playwright install chromium
+// 说明：需要 playwright（未写入 package.json —— 体积大且只是校验工具）。
+// 未安装时默认跳过；但设置 REQUIRE_PLAYWRIGHT=1 时**必须**失败，
+// 否则 CI 会在"什么都没检查"的情况下报绿 —— 这正是本脚本踩过的第三个假通过。
 let chromium
 try {
   ;({ chromium } = await import('playwright'))
 } catch {
   try {
-    // 退回全局安装的位置
+    // 退回全局安装位置（全局 node_modules 路径随环境而异，动态查询）
+    const { execSync } = await import('node:child_process')
     const { createRequire } = await import('node:module')
+    const globalRoot = execSync('npm root -g', { encoding: 'utf8' }).trim()
     const require = createRequire(import.meta.url)
-    ;({ chromium } = require('/usr/local/lib/node_modules/playwright'))
+    ;({ chromium } = require(`${globalRoot}/playwright`))
   } catch {
+    if (process.env.REQUIRE_PLAYWRIGHT === '1') {
+      console.error('❌ 未安装 playwright，但 REQUIRE_PLAYWRIGHT=1 要求必须执行检查')
+      console.error('   安装：npm i -g playwright && npx playwright install chromium')
+      process.exit(1)
+    }
     console.log('⚠️  未安装 playwright，跳过响应式检查')
     console.log('   安装：npm i -g playwright && npx playwright install chromium')
     process.exit(0)
