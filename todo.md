@@ -4,7 +4,7 @@
 
 ## Now
 
-（全部完成 —— 前后端分离重构完成；内网 API 冒烟 51/51 通过、集成测试与单元测试全绿）
+（全部完成 —— 已发布至 GitHub，CI 自动测试与 ghcr 镜像构建全绿）
 
 ## Next
 
@@ -15,6 +15,31 @@
 （无）
 
 ## Log
+
+- **2026-09-23 P11 发布到 GitHub 并接入 CI/CD**
+  1. **命名**：仓库定为 **lan-drive**（镜像 `ghcr.io/sakana-1314/lan-drive`），
+     已建公开仓库并推送：<https://github.com/Sakana-1314/lan-drive>。
+  2. **前端容器化**：新增 `web/Dockerfile`（node 构建 → nginx 运行）+ `web/nginx.conf`
+     （SPA 回退、`/config.js` 禁缓存、assets 长缓存）+ `docker-entrypoint.d/40-lan-drive-config.sh`。
+     关键设计：**运行时注入 API 地址**——镜像保持"地址无关"，同一 tag 可部署到任意环境，
+     换内网地址只需 `LANDRIVE_API_BASE_URL` 重启容器，无需重新构建。
+     前端地址解析优先级：运行时 `/config.js` → 构建期 `VITE_API_BASE_URL` → 同源 `/api`。
+  3. **自动测试**（`test.yml`）：变更路径检测 + 后端起 MySQL 8.0 service 跑单元与集成测试 +
+     前端 typecheck/网络判定单测/生产构建（并校验产物含固定提示文案）；汇总 job `测试通过`。
+  4. **自动构建镜像**（`build-images.yml`）：推送 ghcr，**固定 tag `:server` / `:web`**，
+     另打时间戳 tag 便于回滚；按变更路径只构建改动的镜像，手动触发时两个都构建。
+  5. **AGENTS.md**：参照 `御坂学习v4` 的规范结构编写，覆盖项目结构、提交规范、
+     通用代码规范、server/web 分端约定、CI/CD 与安全红线。
+  6. **踩到并修复的两个真实问题**：
+     - **ghcr 镜像名必须全小写**：`github.repository_owner` 是 `Sakana-1314`（含大写），
+       首次构建报 `repository name must be lowercase`；改为小写常量并加了一步前置校验。
+     - **必需检查工作流不能按路径过滤**：`测试通过` 是分支保护必需检查，原先 `on:` 带
+       `paths` 过滤，导致只改 docs/README 的 PR 完全不触发工作流，必需检查永不回报，
+       PR 永久卡在 `BLOCKED`（已用 PR #1 复现）。改为「总是触发 + job 内按目录跳过」，
+       并在 AGENTS.md 写明该规则；验证后 `BLOCKED → CLEAN` 正常合并。
+  7. **验证**：`测试通过` 与 `构建并推送镜像` 在 main 上全绿；两个镜像匿名可拉取
+     （server 36.5 MB / web 26.1 MB）；分支保护已启用（必需检查 `测试通过`）；
+     仓库已打 topics 并配置描述。
 
 - **2026-09-23 P10 架构调整：改为 server / web 前后端分离（按用户要求）**
   用户指出目录设计有误：应分为 `server`、`web` 两个目录，前后端分离；**前端部署在公网，接口在内网**；
