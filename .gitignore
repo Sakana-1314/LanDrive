@@ -6,6 +6,11 @@ server/bin/
 # 依赖
 node_modules/
 web/node_modules/
+docs/websites/node_modules/
+
+# 文档站构建产物
+docs/websites/.vitepress/dist/
+docs/websites/.vitepress/cache/
 
 # 前端环境变量：可能含真实内网域名，一律不提交（模板见 web/.env.example）
 web/.env

@@ -10,6 +10,7 @@
 | `web/` | Vue 3 + TS + Vite + Naive UI 前端（**部署在公网**静态托管） |
 | `.github/workflows/` | CI/CD 工作流 |
 | `docs/design.md` | 设计与接口契约，**实现以它为准** |
+| `docs/websites/` | 文档站（VitePress），面向使用者的教程；`pages/` 是内容 |
 | `docs/scripts/smoke.sh` | 部署后端到端冒烟脚本 |
 
 **部署拓扑是硬约束**：前端在公网、API 在内网，两者跨域通信。任何改动都不得破坏这条边界，
@@ -54,7 +55,17 @@
 - **样式**：用 Naive UI 组件与 `n-space`/`n-card` 布局，避免自写大段 CSS；主题令牌集中在 `src/utils/theme.ts`。
 - **代码质量**：`npm run typecheck`（vue-tsc）、`npm test`（网络判定单测）、`npm run build` 全绿。
 
-## 6. CI/CD
+## 6. docs（文档站）
+
+- **技术栈**：VitePress（源码 `docs/websites/pages/`，构建产物 `docs/websites/.vitepress/dist/`）。
+- **面向使用者**：文档站只讲**怎么部署、怎么用**，不写实现细节（那些放 `docs/design.md`）。语言要口语化、面向非开发同事。
+- **`base` 必须与仓库路径大小写完全一致**（当前为 `/lan-drive/`）。GitHub Pages 的路径**区分大小写**，仓库改名（尤其大小写）会让线上资源全部 404，必须同步改 `docs/websites/.vitepress/config.ts` 与 `website.yml` 的校验前缀。
+- **图用 Mermaid 写**（```` ```mermaid ```` 代码块，已接入 `vitepress-plugin-mermaid`），状态机用 `stateDiagram-v2`、流程用 `flowchart`；不要贴图片。
+- **站内互引用相对路径**（如 `./deploy`、`../usage/login`）；VitePress 对死链只警告不报错，因此 `website.yml` 里有一次硬校验，改链接后请本地 `make docs` 确认。
+- **不要把 `node_modules` / `.vitepress/dist` 提交**（已在 `.gitignore`）。
+- 本地预览：`make docsdev`；构建：`make docs`。注意本仓库开发环境的 `NODE_ENV=production` 会让 npm 跳过 devDependencies，**安装时必须带 `--include=dev`**，否则 VitePress 装不上。
+
+## 7. CI/CD
 
 - **`test.yml`（测试）**：push 任意分支与 PR 触发。`detect` 按变更目录过滤（`server/**` / `web/**`）；后端起 MySQL 8.0 service 跑单元 + 集成测试，前端跑 typecheck / 单测 / 构建并校验产物（含固定文案存在性）。汇总 job `测试通过` 是分支保护的必需检查，路径跳过按成功处理。
 - **⚠️ 必需检查工作流禁止在 `on:` 上写 `paths` 过滤**：`测试通过` 是分支保护的必需检查，若在触发层就按路径过滤，只改 `docs/`、`README.md`、`todo.md` 的 PR 不会触发工作流，必需检查永不回报，PR 会永久卡在 `BLOCKED` 无法合并。正确做法是「**总是触发 + 在 job 内按变更目录跳过**」：`on` 不写 `paths`，由 `detect` 判断、子任务 `if` 跳过，汇总 job 始终回报状态。`build-images.yml` 不是必需检查，可以保留路径过滤以省额度。
@@ -63,5 +74,6 @@
   - `ghcr.io/sakana-1314/lan-drive:web`（公网前端）
   
   同时打时间戳 tag（`server-YYYYMMDD-HHMMSS`）便于回滚。按变更路径只构建改动过的镜像；手动触发时两个都构建。web 镜像通过 `--build-arg HOST=${{ vars.API_HOST }}` 注入后端域名，**域名只允许来自仓库变量 `vars.API_HOST`，禁止写进工作流文件**。
+- **`website.yml`（构建并发布文档站）**：push `main` 与 PR（`docs/**` 变更）+ 手动触发。PR 只构建校验、不发布；push `main` 时构建后强推 `gh-pages` 分支，由 GitHub Pages 发布到 <https://sakana-1314.github.io/lan-drive/>。发布前会硬校验站内链接与资源是否都存在。
 - **镜像要求**：`server` 镜像只含二进制（多阶段构建、非 root、内置 HEALTHCHECK）；`web` 镜像为 nginx + 静态产物 + `docker-entrypoint.d` 运行时注入脚本。两个镜像都不得硬编码内网地址或密钥。
 - **安全红线**：工作流文件公开可见，**严禁硬编码 IP、密钥、内网域名**，一律 `${{ secrets.* }}` / `${{ vars.* }}` 引用；`GITHUB_TOKEN` 只申请必需的权限（`contents: read`、推送镜像时加 `packages: write`）。
