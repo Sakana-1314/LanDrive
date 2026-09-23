@@ -16,6 +16,41 @@
 
 ## Log
 
+- **2026-09-23 P14 前端镜像支持 /api 同源反代**
+  新增 `LANDRIVE_API_PROXY=主机:端口`：前端容器内的 nginx 把同源 `/api` 转发到后端容器。
+  浏览器只访问一个域名 → 不跨域、不需要 CORS，后端地址也不暴露。compose 已默认开启
+  （`api:8080`），1Panel 只需为网页端配一个域名，`LANDRIVE_CORS_ALLOW` 可留空。
+
+  实测踩到并修掉的问题（已写进 AGENTS.md 与回归测试）：
+  1. nginx 不允许同一 location 里既 include `proxy_pass` 又写 `return` →
+     把 `location /api/` 整体外置到 `proxy.d/api.conf`，由入口脚本生成。
+  2. 未反代时 `/api` 落到 SPA 回退返回 200 + HTML → 健康探测误判为"已连通"，
+     用户登录才失败。改为显式返回 JSON 404。
+  3. `proxy_pass` 直接写主机名时 nginx 启动即解析，后端未就绪会
+     `[emerg] host not found in upstream` 让**整个前端起不来** →
+     改用变量 + `resolver`，把解析推迟到请求时。
+  4. `grep` 按行校验 → 含**换行**的取值绕过校验并注入 nginx 指令 → 改用 `case` 整串匹配；
+     另拒绝空主机名（`:8080`）、空端口（`api:`）、非数字/越界端口、路径与空格。
+  5. 启用反代但前端仍用绝对地址 → 反代形同虚设。同时把运行时 `apiBaseUrl` 写成 `/api`。
+  6. `COPY . .` 会把本机 node_modules/dist 带进镜像 → 新增 `web/.dockerignore`。
+
+  前端侧把 API 基址解析与健康探测判定抽成纯函数模块（`base-url.ts` / `health.ts`），
+  修掉 `probeHealth` 把 200 + HTML 当成已连通的误判。
+
+  验证：真实 nginx 1.26 + Go 后端实测 —— /api 前缀与查询串保留、`Authorization` 与
+  `X-Real-IP`/`X-Forwarded-For`/`X-Forwarded-Proto` 透传、20MB 与 200MB 上传字节数一致、
+  5MB 下载完整、后端不可达返回 502 且首页仍可用、双层反代（1Panel → 前端 → 后端）正常、
+  上游不存在时 `nginx -t` 仍通过。新增 `web/scripts/test-entrypoint.sh`（32 项断言），
+  接入 `npm run test:entrypoint` / `make check` / CI。
+
+  CI 两次失败均暴露了**测试自身的缺陷**，已修：
+  - 测试把 nginx.conf 复制到临时目录时 include 模式写成 `*.conf`，而实际是 `api.conf`，
+    替换静默失败；本机因手工建过该文件而"假通过"，CI 上才暴露。已改正模式并加自检
+    （替换失败即判失败），且验证对两种注入变异都能报错。
+  - 构建产物断言按字面量 `https://localhost/api` 判断 HOST 注入；重构后 `${HOST}/api`
+    在运行时拼接，产物只留 `https://localhost`，行为未变但断言误报。改为断言注入值存在，
+    拼接行为由 `base-url.spec.ts` 覆盖。
+
 - **2026-09-23 P13 仓库改名为 LanDrive**
   仓库由 `Sakana-1314/lan-drive` 重命名为 **`Sakana-1314/LanDrive`**。
   因为 **GitHub Pages 路径区分大小写**，站点 base 与线上地址必须与仓库名完全一致，
