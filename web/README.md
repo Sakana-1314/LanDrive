@@ -3,7 +3,25 @@
 本目录是**前端静态站点**，构建产物 `dist/` 部署到公网；接口走公司内网的 API 服务
 （`../server/`）。两者分离部署、跨域通信。
 
-## 构建
+## 镜像部署（推荐）
+
+CI 会推送固定 tag 到 ghcr：`ghcr.io/sakana-1314/lan-drive:web`。
+
+镜像内置**运行时注入**：启动时读取环境变量 `LANDRIVE_API_BASE_URL` 生成 `/config.js`，
+因此**同一个镜像可部署到任意环境**，换内网地址只需重启容器，无需重新构建。
+
+```bash
+docker run -d -p 80:80 \
+  -e LANDRIVE_API_BASE_URL='http://192.168.1.100:8080/api' \
+  ghcr.io/sakana-1314/lan-drive:web
+```
+
+| 环境变量 | 说明 |
+| --- | --- |
+| `LANDRIVE_API_BASE_URL` | 内网 API 完整地址（含 `/api`）；结尾斜杠会自动去掉 |
+| `LANDRIVE_API_PROBE_TIMEOUT` | 连通性探测超时（毫秒），默认 6000 |
+
+## 构建静态产物
 
 ```bash
 cp .env.example .env.production
@@ -13,6 +31,15 @@ npm run build        # 产物在 dist/
 ```
 
 把 `dist/` 的内容放到公网静态托管即可（Nginx / OSS / CDN 均可）。
+静态托管时不方便改环境变量，可直接编辑部署后的 `config.js`——它优先于构建期变量。
+
+### API 地址优先级
+
+解析逻辑在 `src/api/index.ts` 的 `resolveApiBaseUrl`：
+
+1. 运行时 `window.__LANDRIVE_CONFIG__.apiBaseUrl`（容器注入的 `/config.js`）
+2. 构建期 `VITE_API_BASE_URL`
+3. 同源 `/api`（适用于用反向代理把 `/api` 转发到内网的场景）
 
 > ⚠️ 后端 `LANDRIVE_CORS_ALLOW` 必须包含本前端被访问的域名，否则浏览器会拦截跨域请求，
 > 用户会看到「无法在此网络下使用，请更换网络再试！」。改完前端地址后需要**重新构建**，

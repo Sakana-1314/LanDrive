@@ -84,13 +84,21 @@
 
 推送 `main` 分支后，GitHub Actions 会**自动构建并推送**两个镜像到 ghcr（固定 tag）：
 
-| 镜像 | 用途 |
-| --- | --- |
-| `ghcr.io/sakana-1314/lan-drive:server` | 内网 API |
-| `ghcr.io/sakana-1314/lan-drive:web` | 公网前端 |
+| 镜像 | 用途 | 大小（压缩） |
+| --- | --- | --- |
+| `ghcr.io/sakana-1314/lan-drive:server` | 内网 API | ~37 MB |
+| `ghcr.io/sakana-1314/lan-drive:web` | 公网前端 | ~26 MB |
 
-同时会打上时间戳 tag（如 `server-20260923-031500`）便于回滚。公开仓库的镜像可直接拉取；
-若为私有包，先 `echo $GHCR_TOKEN | docker login ghcr.io -u <用户名> --password-stdin`。
+- **固定 tag 不随版本变化**，部署脚本可长期引用；同时打时间戳 tag（如 `server-20260923-033115`）便于回滚。
+- 镜像公开可匿名拉取，`docker pull ghcr.io/sakana-1314/lan-drive:server` 直接可用，无需登录。
+- 按变更路径只构建改动过的镜像（改 `server/**` 只重建 server）；也可在 Actions 页面手动触发同时构建两个。
+
+**回滚到历史版本**：
+
+```bash
+docker pull ghcr.io/sakana-1314/lan-drive:server-20260923-033115
+docker tag  ghcr.io/sakana-1314/lan-drive:server-20260923-033115 ghcr.io/sakana-1314/lan-drive:server
+```
 
 ### 第一步：部署内网 API
 

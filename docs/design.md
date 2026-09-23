@@ -341,6 +341,16 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | `VITE_API_PROBE_TIMEOUT` | `6000` | 连通性探测超时（毫秒） |
 | `VITE_DEV_API_TARGET` | `http://127.0.0.1:8080` | 仅开发态 vite 代理目标 |
 
+容器部署时还有**运行时**变量（不重新构建镜像即可切换内网地址）：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `LANDRIVE_API_BASE_URL` | 构建期值 | 容器启动时写入 `/config.js`，优先级高于构建期 `VITE_API_BASE_URL` |
+| `LANDRIVE_API_PROBE_TIMEOUT` | `6000` | 运行时覆盖探测超时（毫秒） |
+
+API 地址解析优先级：**运行时 `/config.js` → 构建期 `VITE_API_BASE_URL` → 同源 `/api`**，
+实现只在 `web/src/api/index.ts` 的 `resolveApiBaseUrl`。
+
 连通性探测：登录页与路由守卫调用 `GET /api/health`，用它区分
 「网络不可达」与「账号密码错误」。
 
