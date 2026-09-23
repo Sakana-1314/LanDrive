@@ -12,7 +12,7 @@ import {
   resolveProbeTimeout
 } from './base-url.ts'
 
-const BUILD_HOST = 'https://ipip-filrs.local.19890605.xyz'
+const BUILD_HOST = 'https://api.example.com'
 
 // 1) 运行时显式绝对地址优先于构建期 HOST
 assert.equal(

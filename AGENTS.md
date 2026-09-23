@@ -106,7 +106,15 @@
   - `ghcr.io/sakana-1314/lan-drive:server`（内网 API）
   - `ghcr.io/sakana-1314/lan-drive:web`（公网前端）
   
-  同时打时间戳 tag（`server-YYYYMMDD-HHMMSS`）便于回滚。按变更路径只构建改动过的镜像；手动触发时两个都构建。web 镜像通过 `--build-arg HOST=${{ vars.API_HOST }}` 注入后端域名，**域名只允许来自仓库变量 `vars.API_HOST`，禁止写进工作流文件**。
+  同时打时间戳 tag（`server-YYYYMMDD-HHMMSS`）便于回滚。按变更路径只构建改动过的镜像；手动触发时两个都构建。**web 镜像故意不传 `HOST`**，让前端走**同源 `/api`**（与网页端自己的域名一致）：
+  - 浏览器只访问一个域名，不跨域、不需要 CORS；
+  - 镜像与部署环境解耦，换地址只改运行时环境变量（`LANDRIVE_API_PROXY` 或 `LANDRIVE_API_BASE_URL`）；
+  - **公开镜像绝不能烘焙真实后端域名**：镜像推到公开 ghcr 后任何人都能解包读取，
+    曾因 `--build-arg HOST=<内网域名>` 把内网地址泄进公开镜像。
+    因此工作流里不得出现 `vars.API_HOST` 之类的注入；确有需要时由使用者自建镜像传 `--build-arg HOST=`。
+  - 守卫：`web/scripts/check-no-internal-host.sh`（构建前扫描 `.env*` / `vite.config.ts` / `src`，
+    排除测试文件），已接入 `npm run test:entrypoint` 与 `build-images.yml`。
 - **`website.yml`（构建并发布文档站）**：push `main` 与 PR（`docs/**` 变更）+ 手动触发。PR 只构建校验、不发布；push `main` 时构建后强推 `gh-pages` 分支，由 GitHub Pages 发布到 <https://sakana-1314.github.io/LanDrive/>。发布前会硬校验站内链接与资源是否都存在。
 - **镜像要求**：`server` 镜像只含二进制（多阶段构建、非 root、内置 HEALTHCHECK）；`web` 镜像为 nginx + 静态产物 + `docker-entrypoint.d` 运行时注入脚本。两个镜像都不得硬编码内网地址或密钥。
-- **安全红线**：工作流文件公开可见，**严禁硬编码 IP、密钥、内网域名**，一律 `${{ secrets.* }}` / `${{ vars.* }}` 引用；`GITHUB_TOKEN` 只申请必需的权限（`contents: read`、推送镜像时加 `packages: write`）。
+- **安全红线**：工作流文件公开可见，**严禁硬编码 IP、密钥、内网域名**；
+  **仓库源码与文档同样公开，示例地址一律用 `example.com` / `localhost` 占位**（真实域名只存在于部署机的 `.env` 与仓库变量/密钥中），一律 `${{ secrets.* }}` / `${{ vars.* }}` 引用；`GITHUB_TOKEN` 只申请必需的权限（`contents: read`、推送镜像时加 `packages: write`）。

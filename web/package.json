@@ -9,7 +9,7 @@
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
     "test": "node --experimental-strip-types src/api/network.spec.ts && node --experimental-strip-types src/api/base-url.spec.ts && node --experimental-strip-types src/api/health.spec.ts",
-    "test:entrypoint": "sh scripts/test-entrypoint.sh"
+    "test:entrypoint": "sh scripts/test-entrypoint.sh && sh scripts/check-no-internal-host.sh"
   },
   "dependencies": {
     "@vicons/ionicons5": "^0.13.0",

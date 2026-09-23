@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 /**
- * 后端域名，由 vite.config.ts 从构建期环境变量 HOST 注入（如 https://ipip-filrs.local.19890605.xyz）。
+ * 后端域名，由 vite.config.ts 从构建期环境变量 HOST 注入（如 https://api.example.com）。
  * 仅 origin，不含 /api；为空串表示走同源 /api。
  */
 declare const __API_HOST__: string
