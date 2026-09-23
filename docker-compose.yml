@@ -46,9 +46,13 @@ services:
       LANDRIVE_ADMIN_NAME: ${LANDRIVE_ADMIN_NAME:-系统管理员}
       # 文件存储根目录（容器内），对应下面的 file-data 卷
       LANDRIVE_DATA_DIR: "/data"
-      # ★ 必填：允许访问接口的网页地址，即用户浏览器里打开的地址。
-      #   填错会导致跨域被拦截，用户看到「无法在此网络下使用，请更换网络再试！」
-      LANDRIVE_CORS_ALLOW: ${LANDRIVE_CORS_ALLOW:?请在 .env 中填写网页端访问地址，例如 https://files.example.com}
+      # 允许访问接口的网页地址（即用户浏览器里打开的地址）。
+      #   - 网页端用默认的 /api 同源反代时：浏览器请求与页面同源，
+      #     不触发跨域，这一项**可以留空**。
+      #   - 网页端跨域直连接口时（LANDRIVE_API_PROXY 置空）：**必填**，
+      #     且必须等于用户浏览器里打开的地址，否则会被浏览器拦截，
+      #     用户看到「无法在此网络下使用，请更换网络再试！」。
+      LANDRIVE_CORS_ALLOW: ${LANDRIVE_CORS_ALLOW:-}
       # 流量经过 1Panel 反向代理时为 true，以便正确记录客户端 IP
       LANDRIVE_TRUST_PROXY: ${LANDRIVE_TRUST_PROXY:-true}
       LANDRIVE_LOG_KEEP_DAYS: ${LANDRIVE_LOG_KEEP_DAYS:-90}
@@ -73,8 +77,11 @@ services:
       - 1panel-network
 
   # ---------- 网页端 ----------
-  # 若网页端要单独部署到公网（接口仍留内网），删掉这一段，
-  # 改为在公网服务器上单独运行 web 镜像并设置 LANDRIVE_API_BASE_URL。
+  # 默认把 /api 反代到上面的 api 容器：浏览器只访问一个域名，
+  # 不跨域、不需要 CORS，后端地址也不出现在浏览器里。
+  #
+  # 若网页端要单独放到公网（接口仍留内网），删掉这一段，
+  # 改为在公网服务器上运行 web 镜像并设置 LANDRIVE_API_BASE_URL。
   web:
     image: ghcr.io/sakana-1314/lan-drive:web
     container_name: lan-drive-web
@@ -84,10 +91,15 @@ services:
       # 这里只保证启动顺序，避免同时重启时页面先于接口就绪。
       - api
     environment:
-      # 浏览器访问接口的地址（要带 /api，且必须是浏览器能访问到的地址）。
-      # 留空则使用镜像构建时注入的地址。
+      # ★ /api 反代目标（容器名:端口）。默认反代到本编排的 api 服务。
+      #   设为空字符串可关闭反代，改用下面的 LANDRIVE_API_BASE_URL 跨域直连。
+      LANDRIVE_API_PROXY: ${LANDRIVE_API_PROXY:-api:8080}
+      # 关闭反代时（LANDRIVE_API_PROXY 为空）浏览器直连的接口地址，要带 /api。
+      # 反代开启时此项留空即可，前端会自动走同源 /api。
       LANDRIVE_API_BASE_URL: ${LANDRIVE_API_BASE_URL:-}
       LANDRIVE_API_PROBE_TIMEOUT: ${LANDRIVE_API_PROBE_TIMEOUT:-6000}
+      # 反代时用到的 DNS（默认自动识别：Docker 内嵌 127.0.0.11）
+      LANDRIVE_DNS_RESOLVER: ${LANDRIVE_DNS_RESOLVER:-}
     ports:
       - "${WEB_PORT:-80}:80"
     healthcheck:

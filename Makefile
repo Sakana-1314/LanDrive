@@ -129,6 +129,7 @@ test: webinstall
 	cd $(SERVER) && $(GO) test ./... -count=1
 	cd $(WEB) && npm run typecheck
 	cd $(WEB) && npm test
+	cd $(WEB) && npm run test:entrypoint
 	@echo "✅ 测试与类型检查通过（含前端网络判定测试）"
 
 vet:
@@ -142,7 +143,8 @@ check: webinstall
 	@echo "== go vet =="; cd $(SERVER) && $(GO) vet ./...
 	@echo "== go test =="; cd $(SERVER) && $(GO) test ./... -count=1
 	@echo "== 前端类型检查 =="; cd $(WEB) && npm run typecheck
-	@echo "== 前端网络判定测试 =="; cd $(WEB) && npm test
+	@echo "== 前端单元测试 =="; cd $(WEB) && npm test
+	@echo "== 前端镜像运行时配置测试 =="; cd $(WEB) && npm run test:entrypoint
 	@echo "✅ 全部检查通过"
 
 # ============ 部署 ============

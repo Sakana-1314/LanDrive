@@ -33,30 +33,39 @@ docker compose up -d
 
 ## 第二步：公网部署网页端
 
-网页端镜像内置了「运行时指定接口地址」的能力，**同一个镜像可以部署到任意环境**。
+网页端镜像支持两种连后端的方式，**同一个镜像靠环境变量切换**。
 
-::: code-group
+### 方式一：跨域直连（推荐用于分离部署）
 
-```bash [直接运行]
+浏览器直接请求内网接口的对外地址，需要后端配置 `LANDRIVE_CORS_ALLOW`。
+
+```bash
 docker run -d --name lan-drive-web -p 80:80 \
   -e LANDRIVE_API_BASE_URL='https://api.example.com/api' \
   ghcr.io/sakana-1314/lan-drive:web
 ```
 
-```yaml [docker compose]
-services:
-  web:
-    image: ghcr.io/sakana-1314/lan-drive:web
-    restart: unless-stopped
-    environment:
-      LANDRIVE_API_BASE_URL: "https://api.example.com/api"
-    ports:
-      - "80:80"
+其中 `LANDRIVE_API_BASE_URL` 填**内网服务端的对外地址**（要带 `/api`）。
+
+### 方式二：网页端反代
+
+网页端容器自己把 `/api` 转发到你指定的地址。适合网页端与某台可达服务器之间网络通畅的情形：
+
+```bash
+docker run -d --name lan-drive-web -p 80:80 \
+  -e LANDRIVE_API_PROXY=api.example.com:8080 \
+  ghcr.io/sakana-1314/lan-drive:web
 ```
 
-:::
+两者选一个即可：
+- 方式一：浏览器直连接口，**后端必须配 CORS**；
+- 方式二：浏览器只访问网页端域名，**不跨域、不用配 CORS**。
 
-其中 `LANDRIVE_API_BASE_URL` 填**内网服务端的对外地址**（要带 `/api`）。
+::: tip 怎么选
+内网接口有独立的对外域名（如 `api.example.com`）→ 用方式一，链路最短。
+
+只想暴露一个域名、或不想维护 CORS 白名单 → 用方式二。
+:::
 
 ## 第三步：让两边能通
 

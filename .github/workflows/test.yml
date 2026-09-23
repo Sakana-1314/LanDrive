@@ -142,9 +142,19 @@ jobs:
         working-directory: web
         run: npm run typecheck
 
-      - name: 单元测试（网络可用性判定）
+      - name: 单元测试（网络判定 / API 基址 / 健康探测）
         working-directory: web
         run: npm test
+
+      # /api 同源反代与运行时配置注入属于"配置正确才工作"的部分：
+      # 写错了本地不会报错，要等容器启动或用户访问才暴露。
+      # 装上 nginx 后这里会额外校验生成的配置能被 nginx 真正解析。
+      - name: 安装 nginx（用于校验生成的配置）
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nginx
+
+      - name: 前端镜像运行时配置测试（/api 反代）
+        working-directory: web
+        run: npm run test:entrypoint
 
       - name: 生产构建
         working-directory: web
