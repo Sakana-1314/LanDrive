@@ -1,0 +1,160 @@
+name: 构建并发布文档站
+
+# 在 main 上构建 docs/websites 的 VitePress 站点，推送到 gh-pages 分支，由 GitHub Pages 发布。
+# 站点地址：https://sakana-1314.github.io/lan-drive/
+#
+# PR 上也构建，但只在 push 到 main / 手动触发时才发布，避免把未审核的文档推上线。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/website.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/website.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 构建到工作区之外，再以全新历史提交，避免把源码树带进 gh-pages。
+  # 注意：站点 base 必须与仓库路径一致（config.ts 里为 /lan-drive/）。
+  SITE_OUT_DIR: ${{ github.workspace }}/.site-dist
+
+jobs:
+  build:
+    name: 构建文档站
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/websites/package-lock.json
+
+      - name: 安装站点依赖
+        working-directory: docs/websites
+        # --include=dev：VitePress 是 devDependency，NODE_ENV=production 时会跳过。
+        run: npm ci --include=dev --no-fund --no-audit
+
+      - name: 构建站点
+        working-directory: docs/websites
+        run: npx vitepress build --outDir "$SITE_OUT_DIR"
+
+      # VitePress 对死链只警告不报错，这里在发布前做一次硬校验：
+      # 页面里的相对链接、静态资源引用必须都能在产物里找到。
+      - name: 校验链接与资源都存在
+        run: |
+          python3 - "$SITE_OUT_DIR" <<'PYEOF'
+          import re, sys, pathlib, posixpath
+
+          root = pathlib.Path(sys.argv[1])
+
+          def resolves(page: str, url: str) -> bool:
+              url = url.split('#')[0].split('?')[0]
+              if not url:
+                  return True
+              if url.startswith(('http://', 'https://', 'mailto:', '//', 'data:')):
+                  return True
+              if url.startswith('/'):
+                  rel = url.lstrip('/')
+                  # 站点部署在 /lan-drive/ 下，绝对路径带该前缀
+                  if rel.startswith('lan-drive/'):
+                      rel = rel[len('lan-drive/'):]
+              else:
+                  rel = posixpath.normpath(posixpath.join(posixpath.dirname(page), url))
+              if rel in ('', '.'):
+                  rel = 'index'
+              target = root / rel
+              if target.is_file():
+                  return True
+              if not rel.endswith('/') and (root / f"{rel}.html").is_file():
+                  return True
+              if (target / 'index.html').is_file():
+                  return True
+              return False
+
+          missing, checked = [], 0
+          for html in sorted(root.rglob('*.html')):
+              page = html.relative_to(root).as_posix()
+              text = html.read_text(encoding='utf-8', errors='ignore')
+              for m in re.finditer(r'(?:href|src)="([^"]+)"', text):
+                  checked += 1
+                  if not resolves(page, m.group(1)):
+                      missing.append((page, m.group(1)))
+
+          print(f"检查了 {checked} 个链接/资源")
+          if missing:
+              print("::error::文档站存在无法解析的引用：")
+              for f, u in missing[:20]:
+                  print(f"  {f} → {u}")
+              sys.exit(1)
+          print("✅ 全部链接与资源均可解析")
+          PYEOF
+
+      - name: 确认入口与关键页面存在
+        run: |
+          set -e
+          for f in index.html 404.html guide/deploy.html usage/login.html admin/users.html; do
+            test -f "$SITE_OUT_DIR/$f" || { echo "::error::缺少页面 $f"; exit 1; }
+          done
+          echo "✅ 入口与关键页面齐全"
+
+      - name: 上传站点产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-dist
+          path: ${{ env.SITE_OUT_DIR }}
+          retention-days: 7
+
+  deploy:
+    name: 发布到 gh-pages
+    needs: build
+    # 只在 main 分支发布；PR 只构建校验。
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/websites/package-lock.json
+
+      - name: 安装站点依赖
+        working-directory: docs/websites
+        run: npm ci --include=dev --no-fund --no-audit
+
+      - name: 构建站点
+        working-directory: docs/websites
+        run: npx vitepress build --outDir "$SITE_OUT_DIR"
+
+      - name: 推送到 gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          cd "$SITE_OUT_DIR"
+          # GitHub Pages 默认用 Jekyll 处理，会忽略下划线开头的目录；禁用它。
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "docs: 发布文档站（${GITHUB_SHA::7}）"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+          echo "✅ 已发布到 gh-pages"

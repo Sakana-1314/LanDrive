@@ -1,0 +1,16 @@
+{
+  "name": "lan-drive-website",
+  "private": true,
+  "type": "module",
+  "description": "局域网文件助手 文档站（VitePress）",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "mermaid": "^11.17.2"
+  }
+}
