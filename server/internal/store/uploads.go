@@ -165,7 +165,7 @@ func (s *Store) UpsertChunk(ctx context.Context, uploadID string, idx int, size 
 func (s *Store) RecomputeReceived(ctx context.Context, uploadID string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE upload_sessions SET received_bytes =
-			(SELECT COALESCE(SUM(size_bytes),0) FROM upload_chunks WHERE upload_id = ?)
+			(SELECT CAST(COALESCE(SUM(size_bytes),0) AS SIGNED) FROM upload_chunks WHERE upload_id = ?)
 		 WHERE id = ?`, uploadID, uploadID)
 	return err
 }

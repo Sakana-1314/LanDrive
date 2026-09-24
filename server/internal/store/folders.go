@@ -84,7 +84,7 @@ func (s *Store) ListChildFolders(ctx context.Context, ownerID int64, parentID *i
 		 FROM folders f
 		 JOIN users u ON u.id = f.owner_id
 		 LEFT JOIN (
-			SELECT folder_id, COUNT(*) AS cnt, COALESCE(SUM(size_bytes),0) AS bytes
+			SELECT folder_id, COUNT(*) AS cnt, CAST(COALESCE(SUM(size_bytes),0) AS SIGNED) AS bytes
 			FROM files WHERE owner_id = ? AND status = ? GROUP BY folder_id
 		 ) fc ON fc.folder_id = f.id
 		 LEFT JOIN (

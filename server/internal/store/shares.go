@@ -180,7 +180,7 @@ func (s *Store) GetFileForShare(ctx context.Context, id int64) (*model.File, err
 func (s *Store) CountFilesInFolder(ctx context.Context, ownerID int64, dirRel string) (int64, int64, error) {
 	var n, bytes int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*), COALESCE(SUM(size_bytes),0) FROM files
+		`SELECT COUNT(*), CAST(COALESCE(SUM(size_bytes),0) AS SIGNED) FROM files
 		 WHERE owner_id = ? AND status = ? AND rel_path LIKE ?`,
 		ownerID, model.StatusActive, escapeLike(dirRel)+"/%").Scan(&n, &bytes)
 	return n, bytes, err

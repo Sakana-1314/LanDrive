@@ -188,7 +188,7 @@ type FileExtStat struct {
 // ListExtStats 统计 active 文件的扩展名分布（管理端用）。
 func (s *Store) ListExtStats(ctx context.Context, limit int) ([]FileExtStat, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT ext, COUNT(*), COALESCE(SUM(size_bytes),0) FROM files
+		`SELECT ext, COUNT(*), CAST(COALESCE(SUM(size_bytes),0) AS SIGNED) FROM files
 		 WHERE status = ? GROUP BY ext ORDER BY COUNT(*) DESC LIMIT ?`, model.StatusActive, limit)
 	if err != nil {
 		return nil, err
@@ -429,7 +429,7 @@ func (s *Store) CountFilesByOwner(ctx context.Context, ownerID int64) (int64, er
 func (s *Store) ActiveUsageByOwner(ctx context.Context, ownerID int64) (int64, int64, error) {
 	var n, bytes int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM files
+		`SELECT COUNT(*), CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) FROM files
 		 WHERE owner_id = ? AND status = ?`,
 		ownerID, model.StatusActive).Scan(&n, &bytes)
 	return n, bytes, err
@@ -462,8 +462,8 @@ func (s *Store) Stats(ctx context.Context, now time.Time) (model.Stats, error) {
 			(SELECT COUNT(*) FROM users),
 			(SELECT COUNT(*) FROM files WHERE status = ?),
 			(SELECT COUNT(*) FROM files WHERE status = ?),
-			(SELECT COALESCE(SUM(size_bytes),0) FROM files WHERE status = ?),
-			(SELECT COALESCE(SUM(size_bytes),0) FROM files WHERE status = ?),
+			(SELECT CAST(COALESCE(SUM(size_bytes),0) AS SIGNED) FROM files WHERE status = ?),
+			(SELECT CAST(COALESCE(SUM(size_bytes),0) AS SIGNED) FROM files WHERE status = ?),
 			(SELECT COUNT(*) FROM files WHERE status = ? AND expires_at <= ? AND expires_at > ?),
 			(SELECT COUNT(*) FROM upload_sessions WHERE status = ?),
 			(SELECT COUNT(*) FROM files WHERE status = ? AND purge_at IS NOT NULL AND purge_at <= ?)`,

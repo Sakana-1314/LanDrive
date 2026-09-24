@@ -407,6 +407,125 @@ else
   bad "存储一致性异常：孤儿 $ORPH、缺失 $MISS、非法路径 $INVALID"
 fi
 
+# ---------- 11.5 文件夹与分享 ----------
+info "11.5 文件夹与分享链接"
+
+# 建文件夹（管理员自己的目录）
+DIR_NAME="冒烟文件夹-$(date +%s)"
+MKDIR="$(api POST /api/folders "$ADMIN_TOKEN" "{\"name\":\"$DIR_NAME\",\"parent_id\":0}")"
+DIR_ID="$(jget "$MKDIR" "j.get('id','')")"
+if [ -n "$DIR_ID" ]; then
+  ok "建文件夹成功（id=$DIR_ID，path=$(jget "$MKDIR" "j.get('path')")）"
+else
+  bad "建文件夹失败：$MKDIR"
+fi
+
+# 同名再建应 409
+CODE="$(httpcode POST /api/folders "$ADMIN_TOKEN" "{\"name\":\"$DIR_NAME\",\"parent_id\":0}")"
+[ "$CODE" = "409" ] && ok "同名文件夹被拒绝（409）" || bad "同名文件夹应 409，实际 $CODE"
+
+# 列目录应能看到它
+LIST="$(api GET "/api/folders?folder_id=0" "$ADMIN_TOKEN" '')"
+FOUND=$(jget "$LIST" "len([f for f in j.get('folders',[]) if f['id']==$DIR_ID])")
+[ "${FOUND:-0}" -ge 1 ] && ok "目录列表能查到该文件夹" || bad "目录列表查不到新建的文件夹"
+
+# 上传一个文件到该文件夹
+SHA_F="$(printf 'smoke-share' | sha256sum | cut -d' ' -f1)"
+INIT_F="$(api POST /api/uploads/init "$ADMIN_TOKEN" "{\"file_name\":\"分享冒烟.txt\",\"file_size\":11,\"sha256\":\"$SHA_F\",\"folder_id\":$DIR_ID}")"
+UP_F="$(jget "$INIT_F" "j.get('upload_id','')")"
+if [ -n "$UP_F" ]; then
+  printf 'smoke-share' > /tmp/lanfs_smoke_share.bin
+  curl -sS -o /dev/null --max-time 30 -X PUT "$BASE_URL/api/uploads/$UP_F/chunks/0" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" --data-binary @/tmp/lanfs_smoke_share.bin
+  DONE_F="$(api POST "/api/uploads/$UP_F/complete" "$ADMIN_TOKEN" '')"
+  FILE_ID="$(jget "$DONE_F" "j.get('file',{}).get('id','')")"
+  REL_F="$(jget "$DONE_F" "j.get('file',{}).get('rel_path','')")"
+  if [ -n "$FILE_ID" ]; then
+    ok "上传到文件夹成功（file_id=$FILE_ID）"
+    case "$REL_F" in
+      *"/$DIR_NAME/"*) ok "文件落在文件夹目录（真实磁盘层级）：$REL_F" ;;
+      *) bad "文件路径为 $REL_F，预期落在 $DIR_NAME/ 下" ;;
+    esac
+  else
+    bad "上传到文件夹失败：$DONE_F"
+  fi
+else
+  bad "带 folder_id 的 init 失败：$INIT_F"
+fi
+
+# 创建分享（永久）
+SHARE="$(api POST /api/shares "$ADMIN_TOKEN" "{\"target_type\":\"file\",\"target_id\":$FILE_ID}")"
+TOKEN="$(jget "$SHARE" "j.get('token','')")"
+ED="$(jget "$SHARE" "j.get('expire_days')")"
+if [ -n "$TOKEN" ]; then
+  ok "创建分享成功（token=${TOKEN:0:8}…）"
+  [ "$ED" = "None" ] && ok "默认有效期为空（永久）" || info "   有效期 expire_days=$ED"
+else
+  bad "创建分享失败：$SHARE"
+fi
+
+# 非法有效期应 400
+CODE="$(httpcode POST /api/shares "$ADMIN_TOKEN" "{\"target_type\":\"file\",\"target_id\":$FILE_ID,\"expire_days\":2}")"
+[ "$CODE" = "400" ] && ok "非法有效期被拒绝（400）" || bad "非法有效期应 400，实际 $CODE"
+
+# 四种合法有效期
+for D in 1 3 7 30; do
+  R="$(api POST /api/shares "$ADMIN_TOKEN" "{\"target_type\":\"file\",\"target_id\":$FILE_ID,\"expire_days\":$D}")"
+  GOT="$(jget "$R" "j.get('expire_days')")"
+  [ "$GOT" = "$D" ] && ok "${D} 天有效期创建成功" || bad "${D} 天有效期失败：$R"
+done
+
+# 免登录访问：**不带 Authorization**
+CODE="$(curl -sS -o /tmp/lanfs_share_resolve.json -w '%{http_code}' --max-time 30 "$BASE_URL/api/s/$TOKEN")"
+STATUS="$(jget "$(cat /tmp/lanfs_share_resolve.json)" "j.get('status','')")"
+[ "$CODE" = "200" ] && [ "$STATUS" = "ok" ] && ok "免登录解析分享成功（status=ok）" \
+  || bad "免登录解析失败（code=$CODE status=$STATUS）"
+
+CODE="$(curl -sS -o /tmp/lanfs_share_dl.bin -w '%{http_code}' --max-time 30 "$BASE_URL/api/s/$TOKEN/download")"
+if [ "$CODE" = "200" ] && [ "$(cat /tmp/lanfs_share_dl.bin)" = "smoke-share" ]; then
+  ok "免登录下载内容正确"
+else
+  bad "免登录下载失败（code=$CODE）"
+fi
+
+# 改名后链接仍可用
+api PATCH "/api/files/$FILE_ID" "$ADMIN_TOKEN" '{"original_name":"改名后.txt"}' >/dev/null
+STATUS="$(jget "$(api GET "/api/s/$TOKEN" '' '')" "j.get('status','')")"
+[ "$STATUS" = "ok" ] && ok "改名后链接仍可用" || bad "改名后链接失效（status=$STATUS）"
+
+# 删除文件后应提示"已被删除"（而不是笼统的链接失效）
+api DELETE "/api/files/$FILE_ID" "$ADMIN_TOKEN" '' >/dev/null
+STATUS="$(jget "$(api GET "/api/s/$TOKEN" '' '')" "j.get('status','')")"
+[ "$STATUS" = "deleted" ] && ok "删除文件后分享提示已被删除（status=deleted）" \
+  || bad "删除后 status 应为 deleted，实际 $STATUS"
+
+# 分享列表：人人可见（这里用管理员令牌验证接口可用与结构）
+SLIST="$(api GET "/api/shares?page=1&page_size=50" "$ADMIN_TOKEN" '')"
+STOTAL="$(jget "$SLIST" "j.get('total',0)")"
+[ "${STOTAL:-0}" -ge 1 ] && ok "分享列表返回 ${STOTAL} 条（含创建者信息）" || bad "分享列表为空"
+
+# 目录分享打包下载应得到 zip
+DIRSHARE="$(api POST /api/shares "$ADMIN_TOKEN" "{\"target_type\":\"folder\",\"target_id\":$DIR_ID}")"
+DTOKEN="$(jget "$DIRSHARE" "j.get('token','')")"
+if [ -n "$DTOKEN" ]; then
+  CODE="$(curl -sS -o /tmp/lanfs_share.zip -w '%{http_code}' --max-time 60 "$BASE_URL/api/s/$DTOKEN/download")"
+  if [ "$CODE" = "200" ] && [ "$(head -c 2 /tmp/lanfs_share.zip)" = "PK" ]; then
+    ok "目录分享打包下载得到有效 zip"
+  else
+    bad "目录分享打包下载失败（code=$CODE）"
+  fi
+fi
+
+# 删除文件夹后，指向它的分享应提示已被删除
+api DELETE "/api/folders/$DIR_ID" "$ADMIN_TOKEN" '' >/dev/null
+STATUS="$(jget "$(api GET "/api/s/$DTOKEN" '' '')" "j.get('status','')")"
+[ "$STATUS" = "deleted" ] && ok "删除文件夹后分享提示已被删除" \
+  || bad "删文件夹后 status 应为 deleted，实际 $STATUS"
+
+# 删掉后应能再建同名文件夹（软删墓碑后缀）
+CODE="$(httpcode POST /api/folders "$ADMIN_TOKEN" "{\"name\":\"$DIR_NAME\",\"parent_id\":0}")"
+[ "$CODE" = "200" ] && ok "删除后可再建同名文件夹" || bad "重建同名文件夹失败（$CODE）"
+
 # ---------- 12. 清理测试数据 ----------
 info "12. 清理测试数据"
 # 删除账号：服务端会先软删其文件再删账号并清目录，无需 purge 参数。

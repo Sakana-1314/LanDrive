@@ -297,11 +297,15 @@ func (s *Service) Rename(ctx context.Context, in RenameInput) (*model.Folder, er
 	return updated, nil
 }
 
-// Delete 删除目录：先把其下所有文件软删（进回收站），再删目录记录与磁盘目录。
+// Delete 删除目录：把其下所有文件软删（进回收站），并软删目录记录。
 //
-// 与"删除文件"保持一致的语义：都是软删，管理员仍可恢复文件。
-// 磁盘目录会真的删掉 —— 目录名是按工号+路径组织的，留着会与将来同路径的
-// 新目录混在一起。
+// **磁盘字节必须保留**，与"删除文件"的语义保持一致（进回收站 → 管理员可恢复 →
+// 到期才物理清理）。早先的实现在这里顺手 RemoveAll 了磁盘目录，结果是：
+//   - 回收站里的记录指向已经不存在的文件，"恢复"恢复出来是个坏记录；
+//   - 一致性扫描报"数据库有、磁盘无"，属真实数据破损。
+//
+// 空目录残留无害（保持目录结构，便于恢复后原样放回），最终由文件的
+// 物理清理与空目录剪枝处理。
 func (s *Service) Delete(ctx context.Context, actor *model.User, id int64) (int64, error) {
 	if actor == nil {
 		return 0, ErrForbidden
@@ -332,11 +336,8 @@ func (s *Service) Delete(ctx context.Context, actor *model.User, id int64) (int6
 	if _, err := s.store.SoftDeleteFolderTree(ctx, f.OwnerID, f.Path); err != nil {
 		return 0, err
 	}
-	// 3) 删磁盘目录。失败不回滚（文件已软删，记录已删），
-	//    残留目录会被一致性扫描发现。
-	if err := s.st.RemoveAll(dirRel); err != nil {
-		return n, err
-	}
+	// 刻意**不删磁盘目录**：其中的文件只是进了回收站，字节要留着才能恢复。
+	_ = dirRel
 	return n, nil
 }
 

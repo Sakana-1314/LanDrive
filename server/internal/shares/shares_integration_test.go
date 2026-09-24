@@ -398,3 +398,56 @@ func withDBTag(dsn, tag string) string {
 	}
 	return base[:slash+1] + dbName + "_" + tag + params
 }
+
+// TestPurgeExpiredShares 验证维护任务清理的是"过期已久"的分享，
+// 且**永久分享与刚过期的分享不受影响**（用户还要能看到"已过期"状态）。
+func TestPurgeExpiredShares(t *testing.T) {
+	svc, st, disk := newSvc(t)
+	ctx := context.Background()
+	owner := mkUser(t, st, "80011", "戊")
+	f := mkFile(t, st, disk, owner, "清理.txt", ".txt")
+
+	perm, err := svc.Create(ctx, CreateInput{Actor: owner, TargetType: model.ShareTargetFile, TargetID: f.ID})
+	if err != nil {
+		t.Fatalf("Create(永久): %v", err)
+	}
+	recent, err := svc.Create(ctx, CreateInput{
+		Actor: owner, TargetType: model.ShareTargetFile, TargetID: f.ID, ExpireDays: intp(1),
+	})
+	if err != nil {
+		t.Fatalf("Create(1天): %v", err)
+	}
+	old, err := svc.Create(ctx, CreateInput{
+		Actor: owner, TargetType: model.ShareTargetFile, TargetID: f.ID, ExpireDays: intp(3),
+	})
+	if err != nil {
+		t.Fatalf("Create(3天): %v", err)
+	}
+
+	// 刚过期（1 小时前）与过期已久（100 天前）
+	if _, err := st.DB().ExecContext(ctx, `UPDATE shares SET expires_at = ? WHERE id = ?`,
+		time.Now().UTC().Add(-time.Hour), recent.ID); err != nil {
+		t.Fatalf("改到期: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `UPDATE shares SET expires_at = ? WHERE id = ?`,
+		time.Now().UTC().AddDate(0, 0, -100), old.ID); err != nil {
+		t.Fatalf("改到期: %v", err)
+	}
+
+	n, err := svc.PurgeExpired(ctx, 30)
+	if err != nil {
+		t.Fatalf("PurgeExpired: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("只应清理过期已久的 1 条，实际 %d", n)
+	}
+	if _, err := st.GetShareByID(ctx, old.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("过期已久的分享应被清理")
+	}
+	if _, err := st.GetShareByID(ctx, perm.ID); err != nil {
+		t.Fatalf("永久分享不应被清理: %v", err)
+	}
+	if _, err := st.GetShareByID(ctx, recent.ID); err != nil {
+		t.Fatalf("刚过期的分享不应被清理（用户还要看到已过期状态）: %v", err)
+	}
+}

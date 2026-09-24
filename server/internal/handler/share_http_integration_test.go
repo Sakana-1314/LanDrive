@@ -5,6 +5,7 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -38,6 +39,7 @@ type httpEnv struct {
 	engine *gin.Engine
 	st     *store.Store
 	disk   *storage.Storage
+	maint  *maintain.Service
 	user   *model.User
 	token  string
 }
@@ -86,10 +88,11 @@ func newHTTPEnv(t *testing.T) *httpEnv {
 	filesSvc := files.New(st, disk, set)
 	upSvc := upload.New(st, disk, set, filesSvc.Decorate)
 
+	maintSvc := maintain.New(st, disk, set)
 	h := handler.New(handler.Deps{
 		Store: st, Storage: disk, Settings: set,
 		Files: filesSvc, Folders: folders.New(st, disk), Shares: shares.New(st, disk, set),
-		Uploads: upSvc, Maintain: maintain.New(st, disk, set), Tokens: tokens,
+		Uploads: upSvc, Maintain: maintSvc, Tokens: tokens,
 	})
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{JWTSecret: strings.Repeat("k", 40)}
@@ -99,7 +102,7 @@ func newHTTPEnv(t *testing.T) *httpEnv {
 	if err != nil {
 		t.Fatalf("签发令牌: %v", err)
 	}
-	return &httpEnv{engine: engine, st: st, disk: disk, user: u, token: tok}
+	return &httpEnv{engine: engine, st: st, disk: disk, maint: maintSvc, user: u, token: tok}
 }
 
 // do 发一个请求。token 为空表示**不带 Authorization 头**（模拟外部访客）。
@@ -590,6 +593,117 @@ func TestUploadIntoTargetFolder(t *testing.T) {
 	for _, it := range rootList.Items {
 		if it.ID == done.File.ID {
 			t.Fatalf("根目录视图不应包含已归入子目录的文件")
+		}
+	}
+}
+
+// doRaw 发一个裸二进制请求（分片上传用）。
+func doRaw(t *testing.T, e *httpEnv, method, path, token string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(method, path, bytes.NewReader(body))
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	e.engine.ServeHTTP(w, r)
+	return w
+}
+
+// 验证 /auth/me 的 used_bytes 是真实字节数。
+// 这条断言在 CAST 之前是**恒等于 0 的假通过**：go-mysql-server 的 SUM 返回
+// float64，Scan 进 int64 报错被 publicWithUsage 忽略，于是永远 0。
+func TestAccountUsageReportsRealBytes(t *testing.T) {
+	e := newHTTPEnv(t)
+	w := e.do(t, "POST", "/api/uploads/init", e.token,
+		`{"file_name":"big.txt","file_size":1048576,"sha256":""}`)
+	var sess model.UploadSession
+	_ = json.Unmarshal(w.Body.Bytes(), &sess)
+
+	// 上传一个大于 1MB 的分片，正好越过 SUM 出错的阈值
+	chunk := make([]byte, 1048576)
+	for i := range chunk {
+		chunk[i] = 'a'
+	}
+	r := doRaw(t, e, "PUT", "/api/uploads/"+sess.ID+"/chunks/0", e.token, chunk)
+	if r.Code != 200 {
+		t.Fatalf("分片上传失败 %d: %s", r.Code, r.Body.String())
+	}
+	w = e.do(t, "POST", "/api/uploads/"+sess.ID+"/complete", e.token, "")
+	if w.Code != 200 {
+		t.Fatalf("complete 失败 %d: %s", w.Code, w.Body.String())
+	}
+
+	w = e.do(t, "GET", "/api/auth/me", e.token, "")
+	var me struct {
+		User model.User `json:"user"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &me)
+	if me.User.FileCount != 1 {
+		t.Fatalf("file_count 应为 1，实际 %d", me.User.FileCount)
+	}
+	if me.User.UsedBytes != 1048576 {
+		t.Fatalf("used_bytes 应为 1048576，实际 %d（SUM 若未 CAST 会静默为 0）", me.User.UsedBytes)
+	}
+}
+
+// TestFolderDeletePreservesFileBytes 回归一个真实的数据破损缺陷：
+// 删除文件夹时曾顺手把磁盘目录 RemoveAll 掉，但文件记录只是**软删**
+// （进回收站、管理员可恢复）。结果是回收站里的记录指向不存在的文件，
+// "恢复"恢复出来是个坏记录，一致性扫描也报"数据库有、磁盘无"。
+// 正确行为：软删记录、**保留字节**，与删单个文件完全一致。
+func TestFolderDeletePreservesFileBytes(t *testing.T) {
+	e := newHTTPEnv(t)
+	w := e.do(t, "POST", "/api/folders", e.token, `{"name":"待删目录","parent_id":0}`)
+	var folder model.Folder
+	_ = json.Unmarshal(w.Body.Bytes(), &folder)
+
+	// 上传一个文件进该目录
+	w = e.do(t, "POST", "/api/uploads/init", e.token,
+		`{"file_name":"保留.txt","file_size":4,"sha256":"","folder_id":`+itoa(folder.ID)+`}`)
+	var sess model.UploadSession
+	_ = json.Unmarshal(w.Body.Bytes(), &sess)
+	_ = doRaw(t, e, "PUT", "/api/uploads/"+sess.ID+"/chunks/0", e.token, []byte("data"))
+	w = e.do(t, "POST", "/api/uploads/"+sess.ID+"/complete", e.token, "")
+	var done struct {
+		File model.File `json:"file"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &done)
+	if done.File.ID == 0 {
+		t.Fatalf("上传失败: %s", w.Body.String())
+	}
+	abs, err := e.disk.Abs(done.File.RelPath)
+	if err != nil {
+		t.Fatalf("Abs: %v", err)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf("上传后文件应在磁盘上: %v", err)
+	}
+
+	// 删目录
+	if w := e.do(t, "DELETE", "/api/folders/"+itoa(folder.ID), e.token, ""); w.Code != 200 {
+		t.Fatalf("删目录失败 %d: %s", w.Code, w.Body.String())
+	}
+
+	// 关键断言：记录进回收站，但字节必须还在（否则无法恢复）
+	got, err := e.st.GetFileForShare(context.Background(), done.File.ID)
+	if err != nil {
+		t.Fatalf("记录应保留（软删而非删行）: %v", err)
+	}
+	if got.Status != model.StatusTrashed {
+		t.Fatalf("文件应变为 trashed，实际 %s", got.Status)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf("软删后磁盘字节必须保留（否则回收站无法恢复）: %v", err)
+	}
+
+	// 一致性扫描不应报"缺失"
+	rep, err := e.maint.ScanStorage(context.Background())
+	if err != nil {
+		t.Fatalf("ScanStorage: %v", err)
+	}
+	for _, m := range rep.Missing {
+		if m == done.File.RelPath {
+			t.Fatalf("一致性扫描报缺失（数据破损）: %s", m)
 		}
 	}
 }

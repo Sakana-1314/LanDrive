@@ -44,7 +44,30 @@ func New(s *store.Store, st *storage.Storage, set *settings.Service) *Service {
 func (s *Service) RunDaily(ctx context.Context) {
 	s.withLock(ctx, "daily", func(ctx context.Context) {
 		s.ScanOrphans(ctx)
+		s.PurgeExpiredShares(ctx)
 	})
+}
+
+// shareGraceDays 过期分享保留多久后清除。
+//
+// 过期后不立刻删：分享者可能还需要在"分享管理"里看到它已过期，
+// 收链接的人也应看到"已过期"而不是"链接无效"。留一段时间再清即可，
+// 目的是不让 shares 表无限增长。
+const shareGraceDays = 30
+
+// PurgeExpiredShares 清理过期已久（超过 shareGraceDays）的分享。
+// 永久分享（expires_at IS NULL）不受影响。
+func (s *Service) PurgeExpiredShares(ctx context.Context) int {
+	deleted, err := s.store.PurgeExpiredShares(ctx, time.Now().UTC().AddDate(0, 0, -shareGraceDays))
+	if err != nil {
+		slog.Error("清理过期分享失败", "error", err)
+		return 0
+	}
+	n := int(deleted)
+	if n > 0 {
+		slog.Info("已清理过期分享", "count", n, "grace_days", shareGraceDays)
+	}
+	return n
 }
 
 // RunExpire 执行到期标记：active 且 expires_at <= now → trashed。
