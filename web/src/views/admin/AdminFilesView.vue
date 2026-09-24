@@ -76,26 +76,24 @@ onMounted(refresh)
 <template>
   <n-card class="card-surface" :bordered="false">
     <div class="section-head">
-      <div class="section-head__title">
+      <!-- 左：筛选（状态切换 + 人员）；右侧留白 -->
+      <div class="section-head__main">
         <n-tag v-if="status === 'trashed'" size="small" type="error" :bordered="false">
           {{ total }} 待清理
         </n-tag>
-      </div>
-
-      <!-- 移动端：筛选器折行到标题下方，避免挤成一团 -->
-      <div class="filters" :class="{ 'filters--mobile': isMobile }">
-        <n-radio-group v-model:value="status" size="small" @update:value="onStatusChange">
-          <n-radio-button value="active">有效</n-radio-button>
-          <n-radio-button value="trashed">回收站</n-radio-button>
-          <n-radio-button value="all">全部</n-radio-button>
-        </n-radio-group>
-        <n-select
-          v-model:value="ownerId"
-          class="owner-filter"
-          :options="ownerOptions"
-          size="small"
-          @update:value="onOwnerChange"
-        />
+        <div class="filters" :class="{ 'filters--mobile': isMobile }">
+          <n-radio-group v-model:value="status" @update:value="onStatusChange">
+            <n-radio-button value="active">有效</n-radio-button>
+            <n-radio-button value="trashed">回收站</n-radio-button>
+            <n-radio-button value="all">全部</n-radio-button>
+          </n-radio-group>
+          <n-select
+            v-model:value="ownerId"
+            class="owner-filter"
+            :options="ownerOptions"
+            @update:value="onOwnerChange"
+          />
+        </div>
       </div>
     </div>
 
@@ -131,13 +129,14 @@ onMounted(refresh)
 <style scoped>
 .filters {
   display: flex;
-  flex: none;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .owner-filter {
-  width: 180px;
+  width: 200px;
 }
 
 .table-wrap {

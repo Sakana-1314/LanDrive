@@ -65,13 +65,16 @@ async function onSubmit() {
   <div class="profile-page">
     <n-card class="card-surface" :bordered="false">
       <div class="section-head">
-        <div class="section-head__title">
-          <n-icon color="var(--color-primary)" :size="18"><person-outline /></n-icon>
-          账号信息
+        <!-- 角色标签属于状态信息，跟标题一起放左区；右侧只留按钮 -->
+        <div class="section-head__main">
+          <div class="section-head__title">
+            <n-icon color="var(--color-primary)" :size="18"><person-outline /></n-icon>
+            账号信息
+          </div>
+          <n-tag size="small" :type="isAdminUser ? 'warning' : 'default'" :bordered="false">
+            {{ isAdminUser ? '管理员' : '普通用户' }}
+          </n-tag>
         </div>
-        <n-tag size="small" :type="isAdminUser ? 'warning' : 'default'" :bordered="false">
-          {{ isAdminUser ? '管理员' : '普通用户' }}
-        </n-tag>
       </div>
 
       <n-descriptions class="info-grid" :column="2" label-placement="top" size="small">
@@ -96,9 +99,11 @@ async function onSubmit() {
 
     <n-card class="card-surface" :bordered="false">
       <div class="section-head">
-        <div class="section-head__title">
-          <n-icon color="var(--color-primary)" :size="18"><key-outline /></n-icon>
-          修改密码
+        <div class="section-head__main">
+          <div class="section-head__title">
+            <n-icon color="var(--color-primary)" :size="18"><key-outline /></n-icon>
+            修改密码
+          </div>
         </div>
       </div>
 

@@ -147,7 +147,7 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
       </template>
     </n-result>
 
-    <n-card v-else-if="info && (info.kind === 'unsupported' || info.kind === 'legacy-office')" :bordered="false" style="border-radius: 8px">
+    <n-card v-else-if="info && (info.kind === 'unsupported' || info.kind === 'legacy-office')" class="card-surface" :bordered="false">
       <n-empty :description="info.note || '该格式不支持在线预览'" style="padding: 40px 0">
         <template #extra>
           <n-button type="primary" @click="onDownload">下载文件</n-button>
@@ -242,23 +242,23 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
   width: 100%;
   height: calc(100vh - 130px);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: #fff;
 }
 .image-wrap {
   text-align: center;
   background: #fff;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   padding: 12px;
 }
 .image {
   max-width: 100%;
   max-height: calc(100vh - 150px);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
 }
 .media-wrap {
   background: #000;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   padding: 12px;
   text-align: center;
 }

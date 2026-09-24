@@ -310,20 +310,23 @@ const pagination = computed(() => ({
          这里补上具体是谁，否则用户不知道自己在看谁的目录 -->
     <div v-if="title" class="list-title">{{ title }}</div>
 
-    <!-- 工具栏：搜索 + 刷新。移动端自动折成两行（搜索占满一行）。 -->
-    <div class="toolbar">
-      <n-input
-        :value="keyword"
-        :placeholder="searchPlaceholder"
-        clearable
-        @update:value="(v: string) => emit('update:keyword', v)"
-        @keyup.enter="emit('refresh')"
-      >
-        <template #prefix>
-          <n-icon><search-outline /></n-icon>
-        </template>
-      </n-input>
-      <div class="toolbar-actions">
+    <!-- 工具栏：左=搜索（筛选），右=刷新与调用方插入的按钮。
+         与各页面头部共用 section-head 一族，保证高度与间距一致。 -->
+    <div class="section-head toolbar">
+      <div class="section-head__main toolbar__search">
+        <n-input
+          :value="keyword"
+          :placeholder="searchPlaceholder"
+          clearable
+          @update:value="(v: string) => emit('update:keyword', v)"
+          @keyup.enter="emit('refresh')"
+        >
+          <template #prefix>
+            <n-icon><search-outline /></n-icon>
+          </template>
+        </n-input>
+      </div>
+      <div class="section-head__actions toolbar-actions">
         <n-button :loading="loading" @click="emit('refresh')">
           <template #icon>
             <n-icon><refresh-outline /></n-icon>
@@ -464,12 +467,15 @@ const pagination = computed(() => ({
   font-weight: 650;
 }
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+/* 结构由全局 .section-head 一族提供，这里只补本组件特有的部分：
+   搜索框占满左区剩余宽度，窄屏整行折行。 */
+.toolbar__search {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolbar__search :deep(.n-input) {
+  width: 100%;
 }
 
 .toolbar-actions {
@@ -578,8 +584,13 @@ const pagination = computed(() => ({
     gap: 10px;
   }
 
+  .toolbar__search {
+    width: 100%;
+  }
+
   .toolbar-actions {
     justify-content: flex-end;
+    margin-left: 0;
   }
 }
 </style>
