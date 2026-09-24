@@ -34,6 +34,8 @@
   --color-surface-translucent: rgb(255 255 255 / 92%);
   --color-border: #e2e7ef;
   --color-border-subtle: #edf0f5;
+  /* 全屏遮罩（整页拖放提示）：明暗两套各给一个，避免组件里写死色值 */
+  --color-overlay: rgb(244 246 250 / 78%);
 
   --color-table-header: #f7f9fc;
   --color-table-row-hover: #f4f7ff;
@@ -94,6 +96,7 @@
   --color-surface-translucent: rgb(25 30 38 / 92%);
   --color-border: #333b47;
   --color-border-subtle: #2a313b;
+  --color-overlay: rgb(19 23 29 / 82%);
 
   --color-table-header: #1e242d;
   --color-table-row-hover: #212936;
