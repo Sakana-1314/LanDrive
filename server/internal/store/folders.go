@@ -11,18 +11,19 @@ import (
 // folderCols 带上属主工号：目录的磁盘路径是 users/<工号>/<path>，
 // 任何需要拼磁盘路径的地方（分享解析、目录下载、改名）都要用到它，
 // 少了它就会拼出 users//... 这种非法路径。
-const folderCols = `f.id, f.owner_id, f.parent_id, f.name, f.path, f.created_at, f.updated_at,
-	u.name, u.employee_no`
+const folderCols = `f.id, f.owner_id, f.parent_id, f.name, f.path, f.status,
+	f.created_at, f.updated_at, u.name, u.employee_no`
 
 func scanFolder(sc interface {
 	Scan(dest ...any) error
 }) (*model.Folder, error) {
 	var f model.Folder
 	var parent sql.NullInt64
-	if err := sc.Scan(&f.ID, &f.OwnerID, &parent, &f.Name, &f.Path, &f.CreatedAt, &f.UpdatedAt,
-		&f.OwnerName, &f.OwnerEmployeeNo); err != nil {
+	if err := sc.Scan(&f.ID, &f.OwnerID, &parent, &f.Name, &f.Path, &f.Status,
+		&f.CreatedAt, &f.UpdatedAt, &f.OwnerName, &f.OwnerEmployeeNo); err != nil {
 		return nil, err
 	}
+	f.Tombstone = f.Status == model.FolderDeleted
 	f.ParentID = nullID(parent)
 	f.CreatedAt = f.CreatedAt.UTC()
 	f.UpdatedAt = f.UpdatedAt.UTC()
@@ -89,7 +90,7 @@ func (s *Store) ListChildFolders(ctx context.Context, ownerID int64, parentID *i
 		 LEFT JOIN (
 			SELECT parent_id, COUNT(*) AS cnt FROM folders GROUP BY parent_id
 		 ) sc ON sc.parent_id = f.id
-		 WHERE f.owner_id = ? AND `+cond+`
+		 WHERE f.owner_id = ? AND f.status = 'active' AND `+cond+`
 		 ORDER BY f.name ASC`,
 		append([]any{ownerID, model.StatusActive, ownerID}, whereArgs...)...)
 	if err != nil {
@@ -102,8 +103,8 @@ func (s *Store) ListChildFolders(ctx context.Context, ownerID int64, parentID *i
 		var f model.Folder
 		var parent sql.NullInt64
 		// 顺序必须与 folderCols + 3 个聚合列一致。
-		if err := rows.Scan(&f.ID, &f.OwnerID, &parent, &f.Name, &f.Path, &f.CreatedAt, &f.UpdatedAt,
-			&f.OwnerName, &f.OwnerEmployeeNo,
+		if err := rows.Scan(&f.ID, &f.OwnerID, &parent, &f.Name, &f.Path, &f.Status,
+			&f.CreatedAt, &f.UpdatedAt, &f.OwnerName, &f.OwnerEmployeeNo,
 			&f.FileCount, &f.UsedBytes, &f.SubFolderCount); err != nil {
 			return nil, err
 		}
@@ -118,7 +119,7 @@ func (s *Store) ListChildFolders(ctx context.Context, ownerID int64, parentID *i
 // ListAllFoldersByOwner 返回某人的全部目录（用于构建面包屑与校验归属）。
 func (s *Store) ListAllFoldersByOwner(ctx context.Context, ownerID int64) ([]model.Folder, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+folderCols+` FROM folders f JOIN users u ON u.id = f.owner_id WHERE f.owner_id = ? ORDER BY f.path ASC`, ownerID)
+		`SELECT `+folderCols+` FROM folders f JOIN users u ON u.id = f.owner_id WHERE f.owner_id = ? AND f.status = 'active' ORDER BY f.path ASC`, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +148,7 @@ func (s *Store) ListFolderAncestors(ctx context.Context, ownerID, folderID int64
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+folderCols+` FROM folders f JOIN users u ON u.id = f.owner_id
-		 WHERE f.owner_id = ? AND (f.path = ? OR ? LIKE CONCAT(f.path, '/%'))
+		 WHERE f.owner_id = ? AND f.status = 'active' AND (f.path = ? OR ? LIKE CONCAT(f.path, '/%'))
 		 ORDER BY LENGTH(f.path) ASC`,
 		ownerID, target.Path, target.Path)
 	if err != nil {
@@ -177,7 +178,7 @@ func (s *Store) FolderNameExists(ctx context.Context, ownerID int64, parentID *i
 	}
 	var n int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM folders WHERE owner_id = ? AND name = ? AND id <> ? AND `+cond,
+		`SELECT COUNT(*) FROM folders WHERE owner_id = ? AND status = 'active' AND name = ? AND id <> ? AND `+cond,
 		args...).Scan(&n)
 	if err != nil {
 		return false, err
@@ -278,12 +279,19 @@ func (s *Store) ListFoldersUnderPath(ctx context.Context, ownerID int64, path st
 	return out, rows.Err()
 }
 
-// DeleteFolderTree 删除目录及其所有子孙的目录记录。
-// 目录下的文件已由服务层先软删（保持"删除即可恢复"的一致语义）。
-func (s *Store) DeleteFolderTree(ctx context.Context, ownerID int64, path string) (int64, error) {
+// SoftDeleteFolderTree 软删除目录及其所有子孙。
+//
+// 不删行，而是把 status 置为 deleted、并把 path 追加墓碑后缀 ":<id>"：
+//   - 分享指向目录记录，"文件夹已被删除"要能被解析出来（删行会退化成"链接无效"）；
+//   - uk_folders_owner_path 是 (owner_id, path) 唯一键，不加后缀就无法再建同名目录。
+//
+// 目录下的文件由服务层先软删，语义与删文件保持一致（都进回收站、都可恢复）。
+func (s *Store) SoftDeleteFolderTree(ctx context.Context, ownerID int64, path string) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM folders WHERE owner_id = ? AND (path = ? OR path LIKE ?)`,
-		ownerID, path, escapeLike(path)+"/%")
+		`UPDATE folders
+		 SET status = ?, path = CONCAT(path, ':', id)
+		 WHERE owner_id = ? AND status = ? AND (path = ? OR path LIKE ?)`,
+		model.FolderDeleted, ownerID, model.FolderActive, path, escapeLike(path)+"/%")
 	if err != nil {
 		return 0, err
 	}

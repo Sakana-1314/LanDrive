@@ -286,24 +286,21 @@ func (s *Service) Resolve(ctx context.Context, token string) (*Resolved, error) 
 		if err != nil {
 			return &Resolved{Status: ResolveNotFound}, nil
 		}
+		// 目录是软删除：记录仍在但 status=deleted。
+		// 用状态判断而不是"目录里没文件" —— 后者会把**本来就是空目录**的
+		// 分享误报成"已被删除"（实测踩过）。
+		if fd.Status == model.FolderDeleted {
+			out.Status = ResolveDeleted
+			out.Name = fd.Name
+			return out, nil
+		}
 		dirRel, err := storage.FolderDirRel(storage.UserDirRel(fd.OwnerEmployeeNo), fd.Path)
 		if err != nil {
 			return &Resolved{Status: ResolveNotFound}, nil
 		}
-		// 目录被删除有两种表现：目录记录没了（上面已处理），
-		// 或目录记录还在但其中文件都被软删了。后者视为"已被删除"。
 		cnt, bytes, err := s.store.CountFilesInFolder(ctx, fd.OwnerID, dirRel)
 		if err != nil {
 			return nil, err
-		}
-		subFolders, err := s.store.ListChildFolders(ctx, fd.OwnerID, &fd.ID)
-		if err != nil {
-			return nil, err
-		}
-		if cnt == 0 && len(subFolders) == 0 {
-			out.Status = ResolveDeleted
-			out.Name = fd.Name
-			return out, nil
 		}
 		out.Status = ResolveOK
 		out.Name = fd.Name
@@ -421,12 +418,12 @@ func (s *Service) decorate(ctx context.Context, sh *model.Share) *model.Share {
 		if sh.FolderID != nil {
 			if fd, err := s.store.GetFolder(ctx, *sh.FolderID); err == nil {
 				sh.TargetName = fd.Name
-				if dirRel, err := storage.FolderDirRel(storage.UserDirRel(fd.OwnerEmployeeNo), fd.Path); err == nil {
-					cnt, bytes, err := s.store.CountFilesInFolder(ctx, fd.OwnerID, dirRel)
-					if err == nil {
-						sh.TargetSizeBytes = bytes
-						subs, _ := s.store.ListChildFolders(ctx, fd.OwnerID, &fd.ID)
-						sh.TargetDeleted = cnt == 0 && len(subs) == 0
+				sh.TargetDeleted = fd.Status == model.FolderDeleted
+				if !sh.TargetDeleted {
+					if dirRel, err := storage.FolderDirRel(storage.UserDirRel(fd.OwnerEmployeeNo), fd.Path); err == nil {
+						if _, bytes, err := s.store.CountFilesInFolder(ctx, fd.OwnerID, dirRel); err == nil {
+							sh.TargetSizeBytes = bytes
+						}
 					}
 				}
 			} else {

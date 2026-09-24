@@ -284,10 +284,9 @@ func (h *Handler) serveShareFolderZip(c *gin.Context, token string, res *shares.
 		failErr(c, err, "打包下载失败")
 		return
 	}
-	if len(entries) == 0 {
-		fail(c, http.StatusGone, "该文件夹为空或已被删除")
-		return
-	}
+	// 空文件夹也返回一个合法的空 zip，而不是 410：
+	// Resolve 已经把"文件夹存在但为空"判为可用（status=ok），
+	// 这里若回"已被删除"，同一份分享就会自相矛盾，用户以为是文件丢了。
 
 	zipName := storage.SanitizeName(folder.Name) + ".zip"
 	c.Header("Content-Disposition", contentDisposition("attachment", zipName, ".zip"))

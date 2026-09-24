@@ -9,7 +9,8 @@ import (
 )
 
 const uploadCols = `s.id, s.owner_id, s.original_name, s.ext, s.size_bytes, s.chunk_size,
-	s.total_chunks, s.received_bytes, s.status, s.dir_rel, s.sha256, s.file_id, s.created_at, s.updated_at`
+	s.total_chunks, s.received_bytes, s.status, s.dir_rel, s.folder_id, s.sha256, s.file_id,
+	s.created_at, s.updated_at`
 
 func scanUpload(sc interface {
 	Scan(dest ...any) error
@@ -17,7 +18,7 @@ func scanUpload(sc interface {
 	var u model.UploadSession
 	var fileID sql.NullInt64
 	if err := sc.Scan(&u.ID, &u.OwnerID, &u.OriginalName, &u.Ext, &u.SizeBytes, &u.ChunkSize,
-		&u.TotalChunks, &u.ReceivedBytes, &u.Status, &u.DirRel, &u.SHA256, &fileID,
+		&u.TotalChunks, &u.ReceivedBytes, &u.Status, &u.DirRel, &u.FolderID, &u.SHA256, &fileID,
 		&u.CreatedAt, &u.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -31,10 +32,10 @@ func scanUpload(sc interface {
 func (s *Store) CreateUploadSession(ctx context.Context, u *model.UploadSession) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO upload_sessions (id, owner_id, original_name, ext, size_bytes, chunk_size,
-			total_chunks, received_bytes, status, dir_rel, sha256)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+			total_chunks, received_bytes, status, dir_rel, folder_id, sha256)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
 		u.ID, u.OwnerID, u.OriginalName, u.Ext, u.SizeBytes, u.ChunkSize,
-		u.TotalChunks, model.UploadUploading, u.DirRel, u.SHA256)
+		u.TotalChunks, model.UploadUploading, u.DirRel, u.FolderID, u.SHA256)
 	if err != nil && isDuplicate(err) {
 		return ErrConflict
 	}

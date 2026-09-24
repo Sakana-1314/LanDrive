@@ -109,8 +109,12 @@ func failErr(c *gin.Context, err error, fallback string) {
 		fail(c, http.StatusConflict, err.Error())
 	case errors.Is(err, files.ErrCannotPinSelf):
 		fail(c, http.StatusBadRequest, err.Error())
-	case errors.Is(err, files.ErrForbidden), errors.Is(err, upload.ErrForbidden):
+	case errors.Is(err, files.ErrForbidden), errors.Is(err, upload.ErrForbidden),
+		errors.Is(err, folders.ErrForbidden), errors.Is(err, shares.ErrForbidden):
 		fail(c, http.StatusForbidden, err.Error())
+	case errors.Is(err, folders.ErrInvalidName), errors.Is(err, shares.ErrInvalidTarget),
+		errors.Is(err, shares.ErrBadExpire):
+		fail(c, http.StatusBadRequest, err.Error())
 	case errors.Is(err, upload.ErrTooLarge):
 		fail(c, http.StatusRequestEntityTooLarge, err.Error())
 	case errors.Is(err, upload.ErrBadExt):

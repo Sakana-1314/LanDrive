@@ -188,11 +188,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*model.Folder, er
 	// 建磁盘目录。失败则回滚记录，避免出现"有记录没目录"。
 	dirRel, err := storage.FolderDirRel(storage.UserDirRel(owner.EmployeeNo), fullPath)
 	if err != nil {
-		_, _ = s.store.DeleteFolderTree(ctx, ownerID, fullPath)
+		_, _ = s.store.SoftDeleteFolderTree(ctx, ownerID, fullPath)
 		return nil, err
 	}
 	if err := s.st.EnsureDir(dirRel); err != nil {
-		_, _ = s.store.DeleteFolderTree(ctx, ownerID, fullPath)
+		_, _ = s.store.SoftDeleteFolderTree(ctx, ownerID, fullPath)
 		return nil, err
 	}
 	return f, nil
@@ -328,8 +328,8 @@ func (s *Service) Delete(ctx context.Context, actor *model.User, id int64) (int6
 	if err != nil {
 		return 0, err
 	}
-	// 2) 删目录记录（子树一并删）。
-	if _, err := s.store.DeleteFolderTree(ctx, f.OwnerID, f.Path); err != nil {
+	// 2) 软删除目录记录（子树一并软删，保留记录以便分享能报"已被删除"）。
+	if _, err := s.store.SoftDeleteFolderTree(ctx, f.OwnerID, f.Path); err != nil {
 		return 0, err
 	}
 	// 3) 删磁盘目录。失败不回滚（文件已软删，记录已删），

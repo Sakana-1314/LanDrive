@@ -9,7 +9,7 @@ import (
 	"lan-drive/internal/model"
 )
 
-const fileCols = `f.id, f.owner_id, f.original_name, f.ext, f.size_bytes, f.mime, f.sha256,
+const fileCols = `f.id, f.owner_id, f.folder_id, f.original_name, f.ext, f.size_bytes, f.mime, f.sha256,
 	f.rel_path, f.status, f.expires_at, f.deleted_at, f.purge_at, f.created_at, f.updated_at,
 	u.name, u.employee_no`
 
@@ -18,7 +18,7 @@ func scanFile(sc interface {
 }) (*model.File, error) {
 	var f model.File
 	var deleted, purge sql.NullTime
-	if err := sc.Scan(&f.ID, &f.OwnerID, &f.OriginalNam, &f.Ext, &f.SizeBytes, &f.Mime, &f.SHA256,
+	if err := sc.Scan(&f.ID, &f.OwnerID, &f.FolderID, &f.OriginalNam, &f.Ext, &f.SizeBytes, &f.Mime, &f.SHA256,
 		&f.RelPath, &f.Status, &f.ExpiresAt, &deleted, &purge, &f.CreatedAt, &f.UpdatedAt,
 		&f.OwnerName, &f.OwnerEmployeeNo); err != nil {
 		return nil, err
@@ -34,10 +34,10 @@ func scanFile(sc interface {
 // CreateFile 插入一条文件记录（调用方必须先成功落盘）。
 func (s *Store) CreateFile(ctx context.Context, f *model.File) error {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO files (owner_id, original_name, ext, size_bytes, mime, sha256, rel_path,
-			status, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		f.OwnerID, f.OriginalNam, f.Ext, f.SizeBytes, f.Mime, f.SHA256, f.RelPath,
+		`INSERT INTO files (owner_id, folder_id, original_name, ext, size_bytes, mime, sha256,
+			rel_path, status, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.OwnerID, f.FolderID, f.OriginalNam, f.Ext, f.SizeBytes, f.Mime, f.SHA256, f.RelPath,
 		f.Status, f.ExpiresAt.UTC())
 	if err != nil {
 		if isDuplicate(err) {
@@ -66,14 +66,20 @@ func (s *Store) GetFile(ctx context.Context, id int64) (*model.File, error) {
 
 // FileQuery 描述文件列表的检索条件。
 type FileQuery struct {
-	OwnerID  int64  // 0 表示不限
-	Status   string // active / trashed / all
-	Keyword  string // 匹配文件名或属主姓名/工号
-	Ext      string // 精确匹配扩展名（小写带点）
-	Page     int
-	PageSize int
-	Sort     string // created_at / size_bytes / expires_at / original_name / owner
-	Order    string // asc / desc
+	OwnerID int64 // 0 表示不限
+	// FolderID 只看某个文件夹内的文件（>0 生效）。
+	FolderID int64
+	// FolderRootOnly 只看根目录下的文件（folder_id = 0）。
+	// 之所以需要这个开关：0 本身就是"根目录"这个合法取值，
+	// 没法用 FolderID 的零值同时表达"不过滤"和"只根目录"。
+	FolderRootOnly bool
+	Status         string // active / trashed / all
+	Keyword        string // 匹配文件名或属主姓名/工号
+	Ext            string // 精确匹配扩展名（小写带点）
+	Page           int
+	PageSize       int
+	Sort           string // created_at / size_bytes / expires_at / original_name / owner
+	Order          string // asc / desc
 }
 
 // sortColumn 把前端排序键映射到白名单列，杜绝 SQL 注入。
@@ -120,6 +126,14 @@ func (q FileQuery) conditions() (string, []any) {
 	if q.OwnerID > 0 {
 		conds = append(conds, "f.owner_id = ?")
 		args = append(args, q.OwnerID)
+	}
+	// 目录过滤：FolderID > 0 只看该目录；FolderRootOnly 只看根目录下的文件
+	// （0 也是合法的 folder_id，所以需要单独一个开关，不能只靠零值判断）。
+	if q.FolderID > 0 {
+		conds = append(conds, "f.folder_id = ?")
+		args = append(args, q.FolderID)
+	} else if q.FolderRootOnly {
+		conds = append(conds, "f.folder_id = 0")
 	}
 	if kw := strings.TrimSpace(q.Keyword); kw != "" {
 		like := "%" + escapeLike(kw) + "%"

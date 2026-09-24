@@ -20,17 +20,21 @@ import (
 // 查询参数：scope=all|mine、owner_id、q、ext、page、page_size、sort、order。
 func (h *Handler) ListFiles(c *gin.Context) {
 	page, size := normalizePage(queryInt(c, "page", 1), queryInt(c, "page_size", 20))
+	// folder_id 指定时只看该目录；folder_root=1 表示只看根目录（不传则不按目录过滤）。
+	// 两者互斥：同时传时以 folder_id 为准。
 	opt := files.ListOptions{
-		Actor:    currentUser(c),
-		Scope:    strings.TrimSpace(c.Query("scope")),
-		OwnerID:  queryInt64(c, "owner_id", 0),
-		Status:   model.StatusActive,
-		Keyword:  c.Query("q"),
-		Ext:      c.Query("ext"),
-		Sort:     c.Query("sort"),
-		Order:    c.Query("order"),
-		Page:     page,
-		PageSize: size,
+		Actor:          currentUser(c),
+		Scope:          strings.TrimSpace(c.Query("scope")),
+		OwnerID:        queryInt64(c, "owner_id", 0),
+		FolderID:       queryInt64(c, "folder_id", 0),
+		FolderRootOnly: strings.TrimSpace(c.Query("folder_root")) == "1",
+		Status:         model.StatusActive,
+		Keyword:        c.Query("q"),
+		Ext:            c.Query("ext"),
+		Sort:           c.Query("sort"),
+		Order:          c.Query("order"),
+		Page:           page,
+		PageSize:       size,
 	}
 	res, err := h.files.List(c.Request.Context(), opt)
 	if err != nil {

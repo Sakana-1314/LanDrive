@@ -29,13 +29,22 @@ CREATE TABLE IF NOT EXISTS folders (
   owner_id   BIGINT UNSIGNED NOT NULL COMMENT '属主',
   parent_id  BIGINT UNSIGNED NULL COMMENT '上级目录，NULL 表示根目录下的一级目录',
   name       VARCHAR(255) NOT NULL COMMENT '目录名（单层，不含斜杠）',
+  -- path 用**软删除**：删除目录时不删行，而是 status='deleted' 并把 path 追加
+  -- ":<id>" 墓碑后缀。这样做的原因有两个：
+  --   1. 分享指向目录记录。若直接删行，外键级联会把分享一起删掉，收链接的人
+  --      只会看到"链接无效"，而真相是"文件夹已被删除" —— 需求要求区分这两者。
+  --   2. uk_folders_owner_path 是 (owner_id, path) 唯一键。不追加后缀的话，
+  --      删掉"报表"后就再也无法新建同名目录了。
+  -- 后缀用 ':' 是安全的：SanitizeFolderName 会剥掉冒号，用户造不出含冒号的路径。
   path       VARCHAR(512) NOT NULL COMMENT '相对用户根目录的路径，如 报表/2026',
+  status     VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'active / deleted',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   -- 同一个人的同一路径只能有一个目录（改名的级联更新必须保持这条成立）
   UNIQUE KEY uk_folders_owner_path (owner_id, path),
   KEY idx_folders_owner_parent (owner_id, parent_id),
+  KEY idx_folders_owner_status (owner_id, status),
   CONSTRAINT fk_folders_owner  FOREIGN KEY (owner_id)  REFERENCES users (id)   ON DELETE CASCADE,
   CONSTRAINT fk_folders_parent FOREIGN KEY (parent_id) REFERENCES folders (id) ON DELETE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT '文件夹';
@@ -46,6 +55,11 @@ ALTER TABLE files
 
 -- 索引拆成独立语句：一个 ALTER 带多个子句在部分 MySQL 兼容实现上不支持。
 ALTER TABLE files ADD KEY idx_files_owner_folder (owner_id, folder_id, status);
+
+-- 上传会话要记住目标文件夹：init 时确定，complete 时据此写入 files.folder_id。
+-- 不在 complete 时重新问客户端，是因为那会给"上传到 A、完成时改口指向 B"留缝隙。
+ALTER TABLE upload_sessions
+  ADD COLUMN folder_id BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '目标文件夹，0=根目录';
 
 -- 分享链接。
 -- token 是 URL 凭证，用 crypto/rand 生成 32 位十六进制，不可预测；

@@ -43,6 +43,11 @@ type ListOptions struct {
 	Scope string
 	// OwnerID 指定只看某个用户目录（0 = 不限）。
 	OwnerID int64
+	// FolderID 只看某个文件夹内的文件（0 且 FolderRootOnly=false 时不按目录过滤）。
+	FolderID int64
+	// FolderRootOnly 只看根目录下的文件。需要独立开关是因为
+	// "根目录"本身就是 folder_id = 0，没法用零值同时表达"不过滤"。
+	FolderRootOnly bool
 	// Status 为空时只看 active；管理员可传 "trashed" / "all"。
 	Status   string
 	Keyword  string
@@ -86,14 +91,16 @@ func (s *Service) List(ctx context.Context, opt ListOptions) (*ListResult, error
 	}
 
 	q := store.FileQuery{
-		OwnerID:  ownerID,
-		Status:   status,
-		Keyword:  opt.Keyword,
-		Ext:      opt.Ext,
-		Sort:     opt.Sort,
-		Order:    opt.Order,
-		Page:     page,
-		PageSize: pageSize,
+		OwnerID:        ownerID,
+		FolderID:       opt.FolderID,
+		FolderRootOnly: opt.FolderRootOnly,
+		Status:         status,
+		Keyword:        opt.Keyword,
+		Ext:            opt.Ext,
+		Sort:           opt.Sort,
+		Order:          opt.Order,
+		Page:           page,
+		PageSize:       pageSize,
 	}
 	items, total, err := s.store.ListFiles(ctx, q)
 	if err != nil {

@@ -91,20 +91,22 @@ type File struct {
 
 // UploadSession 分片上传会话。
 type UploadSession struct {
-	ID            string    `json:"upload_id"`
-	OwnerID       int64     `json:"-"`
-	OriginalName  string    `json:"original_name"`
-	Ext           string    `json:"ext"`
-	SizeBytes     int64     `json:"size_bytes"`
-	ChunkSize     int       `json:"chunk_size"`
-	TotalChunks   int       `json:"total_chunks"`
-	ReceivedBytes int64     `json:"received_bytes"`
-	Status        string    `json:"status"`
-	DirRel        string    `json:"-"`
-	SHA256        string    `json:"-"`
-	FileID        *int64    `json:"file_id"` // 合并成功后写入，用于幂等返回
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string `json:"upload_id"`
+	OwnerID       int64  `json:"-"`
+	OriginalName  string `json:"original_name"`
+	Ext           string `json:"ext"`
+	SizeBytes     int64  `json:"size_bytes"`
+	ChunkSize     int    `json:"chunk_size"`
+	TotalChunks   int    `json:"total_chunks"`
+	ReceivedBytes int64  `json:"received_bytes"`
+	Status        string `json:"status"`
+	DirRel        string `json:"-"`
+	// FolderID 目标文件夹（0=根目录）；complete 时写入文件记录。
+	FolderID  int64     `json:"folder_id"`
+	SHA256    string    `json:"-"`
+	FileID    *int64    `json:"file_id"` // 合并成功后写入，用于幂等返回
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// Uploaded 是已落盘的分片序号（升序）。由 handler 填充。
 	Uploaded []int `json:"uploaded"`
@@ -142,10 +144,11 @@ type OwnerAggregate struct {
 	Pinned bool `json:"pinned"`
 }
 
-// FolderStatus 目录状态。目前只有"正常"与"删除中"：
-// 删目录走的是"先软删其中所有文件、再删目录行"，不做独立的回收站。
+// 目录状态。删除目录用**软删除**（保留行、path 加墓碑后缀），
+// 而不是删行：分享指向目录记录，删行会让"文件夹已被删除"退化成"链接无效"。
 const (
-	FolderActive = "active"
+	FolderActive  = "active"
+	FolderDeleted = "deleted"
 )
 
 // Folder 一个文件夹。每人一棵树，path 是相对"用户根目录"的规范化路径。
@@ -155,8 +158,13 @@ type Folder struct {
 	ParentID  *int64    `json:"parent_id"`
 	Name      string    `json:"name"`
 	Path      string    `json:"path"`
+	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// Tombstone 为真表示这是一条已删除目录的记录（path 带墓碑后缀）。
+	// 只有分享解析会用它判断"文件夹已被删除"，正常列表一律过滤掉。
+	Tombstone bool `json:"-"`
 
 	// 以下由服务层填充，不落表。
 	OwnerName       string `json:"owner_name"`

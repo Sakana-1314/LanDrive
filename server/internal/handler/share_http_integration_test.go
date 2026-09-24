@@ -464,3 +464,132 @@ func withTag(dsn, tag string) string {
 	}
 	return base[:slash+1] + dbName + "_" + tag + params
 }
+
+// TestEmptyFolderShareIsNotReportedAsDeleted 回归一个我实测踩到的错误设计：
+// 曾经用"目录里没有文件"来判断目录已被删除，于是**本来就是空的**目录
+// 会被误报成"分享的文件夹已被删除"。
+// 目录删除是软删除（status=deleted），判断必须依据状态而不是内容多少。
+func TestEmptyFolderShareIsNotReportedAsDeleted(t *testing.T) {
+	e := newHTTPEnv(t)
+	w := e.do(t, "POST", "/api/folders", e.token, `{"name":"空目录","parent_id":0}`)
+	var folder model.Folder
+	_ = json.Unmarshal(w.Body.Bytes(), &folder)
+
+	created := e.createShare(t, "folder", folder.ID, "")
+	token := created["token"].(string)
+
+	// 空目录：应正常可用（只是文件数为 0），不能报 deleted
+	w = e.do(t, "GET", "/api/s/"+token, "", "")
+	var res map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &res)
+	if res["status"] != "ok" {
+		t.Fatalf("空目录分享应可用，实际 status=%v", res["status"])
+	}
+	if res["file_count"].(float64) != 0 {
+		t.Fatalf("空目录 file_count 应为 0，实际 %v", res["file_count"])
+	}
+}
+
+// TestDeletedFolderShareReportsDeleted 验证删除目录后：
+// 分享解析报 deleted（而不是 notfound），且目录名仍能告知。
+func TestDeletedFolderShareReportsDeleted(t *testing.T) {
+	e := newHTTPEnv(t)
+	w := e.do(t, "POST", "/api/folders", e.token, `{"name":"待删目录","parent_id":0}`)
+	var folder model.Folder
+	_ = json.Unmarshal(w.Body.Bytes(), &folder)
+	created := e.createShare(t, "folder", folder.ID, "")
+	token := created["token"].(string)
+
+	if w := e.do(t, "DELETE", "/api/folders/"+itoa(folder.ID), e.token, ""); w.Code != http.StatusOK {
+		t.Fatalf("删目录失败 %d: %s", w.Code, w.Body.String())
+	}
+
+	w = e.do(t, "GET", "/api/s/"+token, "", "")
+	var res map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &res)
+	if res["status"] != "deleted" {
+		t.Fatalf("删目录后应报 deleted，实际 %v", res["status"])
+	}
+	if res["name"] != "待删目录" {
+		t.Fatalf("应保留目录名以便提示，实际 %v", res["name"])
+	}
+
+	// 删掉后应能再建同名目录（软删除的墓碑后缀就是为这个）
+	w = e.do(t, "POST", "/api/folders", e.token, `{"name":"待删目录","parent_id":0}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("删除后应能再建同名目录，实际 %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestInvalidExpireReturns400 回归实测缺陷：非法有效期曾返回 500
+// （领域错误没有映射到 failErr），客户端拿到的是"服务器错误"而不是"参数不对"。
+func TestInvalidExpireReturns400(t *testing.T) {
+	e := newHTTPEnv(t)
+	f := e.mkFile(t, "x.txt", ".txt", "x")
+	w := e.do(t, "POST", "/api/shares", e.token,
+		`{"target_type":"file","target_id":`+itoa(f.ID)+`,"expire_days":2}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("非法有效期应返回 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+}
+
+// TestUploadIntoTargetFolder 验证带 folder_id 的上传真正落在该目录
+// （磁盘真实层级），并且文件列表能按目录过滤出来。
+func TestUploadIntoTargetFolder(t *testing.T) {
+	e := newHTTPEnv(t)
+	w := e.do(t, "POST", "/api/folders", e.token, `{"name":"目标目录","parent_id":0}`)
+	var folder model.Folder
+	_ = json.Unmarshal(w.Body.Bytes(), &folder)
+
+	// 走真实分片上传
+	body := `{"file_name":"报表.xlsx","file_size":4,"sha256":"","folder_id":` + itoa(folder.ID) + `}`
+	w = e.do(t, "POST", "/api/uploads/init", e.token, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("init 失败 %d: %s", w.Code, w.Body.String())
+	}
+	var sess model.UploadSession
+	_ = json.Unmarshal(w.Body.Bytes(), &sess)
+	// 上传分片
+	w = e.do(t, "PUT", "/api/uploads/"+sess.ID+"/chunks/0", e.token, "data")
+	if w.Code != http.StatusOK {
+		t.Fatalf("上传分片失败 %d: %s", w.Code, w.Body.String())
+	}
+	w = e.do(t, "POST", "/api/uploads/"+sess.ID+"/complete", e.token, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete 失败 %d: %s", w.Code, w.Body.String())
+	}
+	var done struct {
+		File model.File `json:"file"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &done)
+
+	// 文件应归属该目录：rel_path 含目录名，folder_id 正确
+	if !strings.Contains(done.File.RelPath, "目标目录/") {
+		t.Fatalf("文件应落在目标目录下，实际 rel_path=%q", done.File.RelPath)
+	}
+	if done.File.FolderID != folder.ID {
+		t.Fatalf("folder_id 应为 %d，实际 %d", folder.ID, done.File.FolderID)
+	}
+
+	// 目录视图能查到
+	w = e.do(t, "GET", "/api/files?folder_id="+itoa(folder.ID), e.token, "")
+	var list struct {
+		Items []model.File `json:"items"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &list)
+	if len(list.Items) != 1 {
+		t.Fatalf("目录内应有 1 个文件，实际 %d", len(list.Items))
+	}
+
+	// 根目录视图不应包含它
+	w = e.do(t, "GET", "/api/files?folder_root=1", e.token, "")
+	var rootList struct {
+		Items []model.File `json:"items"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &rootList)
+	for _, it := range rootList.Items {
+		if it.ID == done.File.ID {
+			t.Fatalf("根目录视图不应包含已归入子目录的文件")
+		}
+	}
+}
