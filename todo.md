@@ -16,6 +16,46 @@
 
 ## Log
 
+- **2026-09-24 P21 穿透目标机复核（确认已是最新，无需更新）**
+
+  用户要求「把最新线上版更新到内网穿透的服务器」。先摸清拓扑再动手，
+  结果与最初的假设不同 —— **对外那个公网 IP 是 `FrpServer` 中继，不是部署机**：
+  它的 frps 管理接口显示多个客户端与 TCP 隧道，其中一条 SSH 隧道
+  转发到内网机 22 端口。也就是说 `ssh -p <穿透端口>` 落到的是内网部署机，
+  公网 IP 只是中转。（具体地址与端口见部署机，**不写进本公开仓库**。）
+
+  两台机器 **hostname 都叫 `Host`**（容易混），靠这些特征区分：
+  - 公网中继：Debian 13 trixie，容器 `MaterialsManager-API / FrpServer /
+    MySQL / Nginx / XRay / SubConverter`，**完全没有 LanDrive**（无容器、
+    无镜像、无 compose、无 1Panel 站点、全盘无前端特征文件）。
+  - 穿透目标：Debian forky/sid，容器
+    `LanDrive-Web / LanDrive-API / FrpClient / IPIP-API / IPIP-Web / Nginx / MySQL`。
+
+  经与用户确认，目标是穿透指向的那台内网机（即 P20 已更新过的那台）。
+  于是把更新流程**幂等地重跑一遍**做确证，而不是"看着像是最新"就结束：
+  - `docker compose pull web api` → 两个镜像均 `Pulled`；
+  - `docker compose up -d web api` → 均为 `Container ... Running`（未重建）；
+  - 更新前后 digest `diff` **完全一致** → 确实无需更新。
+
+  版本确证（与 ghcr 上 `web`/`server` 的 `docker-content-digest` 逐一相等）：
+  `web = sha256:97823fa3…6305`、`server = sha256:c1005616…09a5`。
+
+  **生产验收**（对着穿透后的真实站点，不是本地）：
+  - 容器 healthy、`/api/health` 通、同源 `/api` 反代通、SPA 深链 200；
+  - 容器内产物含本次新增文案、旧 `n-upload-dragger` 已消失、`section-head__main`
+    与 `popoverColor` 两档均在；首页加载的正是本次发布的 `index-B9p6YPQV.js`；
+  - 真实浏览器：整页拖放提示生效、头部控件统一 34px、下拉菜单明暗两档底色
+    `rgb(255,255,255)` / `rgb(28,34,43)` 且左对齐、各管理页无 JS 报错；
+  - 数据未动：用户 2、回收站 1、`data/users` 文件 1。回滚点
+    `/root/landrive-update-20260924-131600`（compose + 更新前镜像快照）。
+
+  **环境提示**：这条穿透隧道仍然不稳（期间断了 3 次）。
+  两点经验：远程写操作照旧 `setsid nohup … &` 交远端后台执行，但**脚本要先
+  `cat >` 落到远端再后台跑** —— 否则 detached 与 stdin 管道冲突，脚本根本收不到；
+  本地浏览器验收需把域名经 `--host-resolver-rules` 映射到隧道端口，
+  且**不能用 `page.request`**（它不走浏览器解析器，会解析到内网地址而超时），
+  改用页面内 `fetch`。
+
 - **2026-09-24 P20 整页拖放上传 + 页面头部/用户下拉菜单统一（PR #15）+ 内网部署**
 
   需求两项：上传不要单独的拖入区域（整页任意位置可拖）；UI 不统一

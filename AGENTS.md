@@ -165,19 +165,35 @@
    （server 没改就别动 `api`，它会执行迁移）。
 3. **核对镜像 digest**：`docker images --digests | grep lan-drive` 的 digest 必须等于
    `build-images.yml` 日志里 push 的那个 `sha256:...`。**只看到 CI 绿灯不算验证。**
+   `docker compose pull` 是判断"要不要更新"的可靠依据：两个镜像都 `Pulled`、随后
+   `up -d` 只报 `Container ... Running`（未 Recreate）、更新前后 digest `diff` 为空
+   —— 说明本来就已经是最新，这是**正常结论**，不要为了"必须做点什么"而强行重建容器。
 4. **验收（对着生产，不是对着本地）**：容器 healthy、`/api/health` 通、
    同源 `/api` 反代通、新产物指纹确实进了容器
    （`docker exec LanDrive-Web grep -l <本次新增文案> /usr/share/nginx/html/assets/*.js`）、
    数据未动（用户数 / 回收站数 / `data/users` 文件数）。
 5. 把结果追加到 `todo.md` 的 Log（这是台账）。
 
+**拓扑（别把中继当部署机）**：对外那个公网 IP 是 **FrpServer 中继**，不是部署机。
+`ssh -p <穿透端口>` 落到的是**内网的部署机**，中继只是转发。
+识别办法：中继上只有 frps/其它项目、**完全没有 LanDrive**（无容器/镜像/compose/站点）；
+部署机上有 `LanDrive-Web` + `LanDrive-API`。两台机器 **hostname 可能都叫 `Host`**，
+所以要用「容器清单 + 内网 IP」区分，不要靠 hostname。动手前先跑
+`curl -u <frps面板账号> http://127.0.0.1:<面板端口>/api/proxy/tcp` 看隧道指向，
+确认目标机器再操作（曾差点误以为要在中继上部署）。
+
 **踩过的坑**：
 - 内网穿透隧道不稳、且会截断大文件。**远程命令一律 `setsid nohup ... &` 交给远端后台执行**，
   否则隧道一断命令就半途中止（曾把 `docker compose up` 打断在中间）。
+  ⚠️ 但**脚本要先 `cat > 远端脚本 && chmod +x`，再 `setsid nohup bash 远端脚本 &`**：
+  直接 `ssh 'setsid ... &' < local.sh` 会让 detached 与 stdin 管道冲突，脚本收不到内容、静默不执行。
 - 需要本地浏览器验收生产页时，用自愈隧道
   （`while true; do ssh ... -N -L <本地端口>:127.0.0.1:<网页端端口> landrive; sleep 2; done`），
   并注意 `page.addInitScript` 必须在 `goto` 之前注册。
-- 真实域名解析到**内网地址**，在开发机上不可直达，只能经隧道访问。
+- 真实域名解析到**内网地址**，在开发机上不可直达，只能经隧道访问。浏览器验收要开
+  `--host-resolver-rules=MAP <域名> 127.0.0.1` + `--ignore-certificate-errors`；
+  且**不要用 `page.request`**（它不走浏览器的解析器，仍会解析到内网地址而超时），
+  改用页面内 `fetch` 拿 token 再写 `localStorage`。
 - 生产的 compose / `.env` 里含 JWT 密钥与管理员密码 —— 只存在于部署机，
   **绝不可复制进仓库、日志或提交信息**；`todo.md` 又是公开文件，写台账时不要重复贴地址与凭据。
 
