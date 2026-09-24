@@ -149,15 +149,16 @@
 
 - **2026-09-23 P18 内网部署更新 + 发现并修复登录按钮失效**
 
-  **部署**（1Panel 主机 43.156.3.118，容器 LanDrive-API / LanDrive-Web）：
+  **部署**（1Panel 主机，容器 LanDrive-API / LanDrive-Web；主机地址见部署机，
+  **不写进本公开仓库**）：
   - 部署前备份：`/root/landrive-update-20260923-211104`（compose + mysqldump 16KB，含 36 条 op_logs）。
   - 先起 web（新镜像），再起 api（api 启动时执行迁移 0002）。
   - 结果：`schema_migrations` = 1,2；`op_logs` 已 DROP；`user_pins` 已建；
     users=2、files=1（trashed）数据完好；`/api/health` 报 `schema_ver: 2`。
   - 已下线的 `/api/admin/logs`、`/api/admin/logs/actions` 均返回 404。
   - 从 compose 移除已失效的 `LANDRIVE_LOG_KEEP_DAYS`。
-  - 经真实域名 `ipip-drive.local.19890605.xyz` 验证：首页/SPA 深链/静态资源/`/api`
-    全部正常。主机本地 13 项功能校验全通过（含使用量口径、置顶往返与边界）。
+  - 经真实域名验证：首页/SPA 深链/静态资源/`/api` 全部正常。
+    主机本地 13 项功能校验全通过（含使用量口径、置顶往返与边界）。
 
   **部署验收时发现一个从初始版本就存在的真实缺陷：点「登录」按钮毫无反应。**
   - 现象：不报错、不发请求、页面不动；只有回车能登录。
