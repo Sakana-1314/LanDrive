@@ -90,7 +90,9 @@ onMounted(load)
 
     <n-card class="card-surface" :bordered="false" :loading="loading">
       <div class="section-head">
-        <div class="section-head__title">到期提醒</div>
+        <div class="section-head__main">
+          <div class="section-head__title">到期提醒</div>
+        </div>
       </div>
       <n-alert v-if="stats && stats.expiring_7d > 0" type="warning" :show-icon="false">
         <n-icon :size="16" class="alert-icon"><alert-circle-outline /></n-icon>

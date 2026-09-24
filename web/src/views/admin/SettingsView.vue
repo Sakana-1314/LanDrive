@@ -244,11 +244,15 @@ onMounted(load)
     <!-- 存储一致性：数据库记录与磁盘文件是否对应 -->
     <n-card class="card-surface settings-card" :bordered="false">
       <div class="section-head">
-        <div class="section-head__title">
-          <n-icon color="var(--color-primary)" :size="18"><cloud-done-outline /></n-icon>
-          存储一致性
+        <div class="section-head__main">
+          <div class="section-head__title">
+            <n-icon color="var(--color-primary)" :size="18"><cloud-done-outline /></n-icon>
+            存储一致性
+          </div>
         </div>
-        <n-button size="small" type="primary" :loading="scanning" @click="scan">扫描</n-button>
+        <div class="section-head__actions">
+          <n-button type="primary" :loading="scanning" @click="scan">扫描</n-button>
+        </div>
       </div>
 
       <div v-if="report" class="scan-result">

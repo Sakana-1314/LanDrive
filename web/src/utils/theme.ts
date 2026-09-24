@@ -23,6 +23,14 @@ interface ThemePalette {
   bodyColor: string
   cardColor: string
   cardBorderColor: string
+  /**
+   * 浮层底色（下拉菜单、选择器弹层等）。
+   *
+   * 必须显式给值：Naive UI 的 Dropdown/Select 弹层用的是 common 里的
+   * popoverColor，不跟随 cardColor。此前没覆盖它，深色档下弹层会掉回
+   * Naive 内置的 rgb(72,72,78) 灰，和本项目的深色面板明显不是一套。
+   */
+  popoverColor: string
   tableHeaderColor: string
   tableHeaderTextColor: string
   hoverColor: string
@@ -51,6 +59,7 @@ const light: ThemePalette = {
   bodyColor: '#f4f6fa',
   cardColor: '#ffffff',
   cardBorderColor: '#e7ebf2',
+  popoverColor: '#ffffff',
   tableHeaderColor: '#f7f9fc',
   tableHeaderTextColor: '#3d4758',
   hoverColor: '#f3f6ff',
@@ -79,6 +88,7 @@ const dark: ThemePalette = {
   bodyColor: '#13171d',
   cardColor: '#191e26',
   cardBorderColor: '#2a313b',
+  popoverColor: '#1c222b',
   tableHeaderColor: '#1e242d',
   tableHeaderTextColor: '#c9d1de',
   hoverColor: '#212936',
@@ -108,6 +118,7 @@ function createThemeOverrides(p: ThemePalette): GlobalThemeOverrides {
       borderColor: p.borderColor,
       bodyColor: p.bodyColor,
       cardColor: p.cardColor,
+      popoverColor: p.popoverColor,
       hoverColor: p.hoverColor,
       borderRadius: '9px',
       boxShadow1: p.boxShadow1,

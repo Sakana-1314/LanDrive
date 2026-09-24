@@ -5,10 +5,13 @@
 //   - 人员：左侧菜单「全部文件」展开后按人切换（?owner=<id>），本页不重复提供；
 //   - 目录：本页内的文件夹导航（?folder=<id>），带面包屑，可新建/重命名/删除。
 //
-// 「我的文件」上方嵌入上传面板：在哪个目录就传到哪个目录（真实磁盘层级）。
+// 上传入口有两个，都不占独立拖拽区的版面：
+//   - 工具条的「上传文件」按钮（移动端没有拖拽操作，必须留按钮）；
+//   - 整页拖放（PageDropZone）—— 拖到页面任意位置松手即传到当前目录。
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  NAlert,
   NButton,
   NCard,
   NEmpty,
@@ -20,6 +23,7 @@ import {
 } from 'naive-ui'
 import {
   ChevronForwardOutline,
+  CloudUploadOutline,
   CreateOutline,
   FolderOpenOutline,
   HomeOutline,
@@ -36,8 +40,10 @@ import {
 } from '@/api'
 import type { FileItem, Folder } from '@/api/types'
 import FileTable from '@/components/FileTable.vue'
-import UploadPanel from '@/components/UploadPanel.vue'
+import PageDropZone from '@/components/PageDropZone.vue'
+import UploadQueue from '@/components/UploadQueue.vue'
 import { useCreateShare } from '@/composables/useCreateShare'
+import { useUploadQueue } from '@/composables/useUploadQueue'
 import { formatBytes } from '@/utils/format'
 import { loadOwners, ownersState } from '@/stores/owners'
 
@@ -238,6 +244,48 @@ function onSortChange(p: { sort: string; order: 'asc' | 'desc' }) {
   load()
 }
 
+// --- 上传 ---
+//
+// 上传只在「我的文件」开放：目标目录是「我的文件」当前所在的那一层，
+// 拖到任意位置、或点「上传文件」选文件，都落到同一处。
+// 队列状态与操作放在 useUploadQueue 里，两个入口共用同一份队列。
+const {
+  tasks: uploadTasks,
+  uploadDisabled,
+  prepare: prepareUpload,
+  addFiles: addUploadFiles,
+  cancel: cancelUpload,
+  retry: retryUpload,
+  remove: removeUpload,
+  clearFinished: clearFinishedUploads
+} = useUploadQueue({
+  getFolderId: () => folderId.value,
+  onUploaded: () => reload()
+})
+
+/**
+ * 整页拖放的落点逻辑。
+ * 目标目录由 addFiles 在**入队那一刻**同步（松手即入队），
+ * 因此用户随后切换目录也不会把这次拖入的文件传错地方。
+ */
+function onDropFiles(files: File[]) {
+  addUploadFiles(files)
+}
+
+// 「全部文件」等非本人目录不开放上传（后端只允许传到自己目录）
+const dropEnabled = computed(() => scope.value === 'mine')
+
+/** 隐藏的原生文件输入：点工具条按钮时由它弹出系统选择框。 */
+const filePicker = ref<HTMLInputElement | null>(null)
+
+/** 选完文件即入队；清空 value，否则连续选同一个文件不会触发 change。 */
+function onPickFiles(e: Event) {
+  const el = e.target as HTMLInputElement
+  const files = Array.from(el.files || [])
+  el.value = ''
+  if (files.length) addUploadFiles(files)
+}
+
 // 切换人员或目录时重置分页与关键字。
 watch(
   () => route.fullPath,
@@ -245,6 +293,9 @@ watch(
     keyword.value = ''
     page.value = 1
     reload()
+    // /files 与 /files/mine 复用同一个组件实例：从「全部文件」切到
+    // 「我的文件」不会重新挂载，因此这里也要准备上传（prepare 幂等）。
+    if (scope.value === 'mine') void prepareUpload()
   }
 )
 
@@ -252,13 +303,14 @@ watch([page, pageSize], () => load())
 
 onMounted(() => {
   reload()
+  if (scope.value === 'mine') void prepareUpload()
 })
 </script>
 
 <template>
   <div class="files-page">
     <n-card class="card-surface files-card" :bordered="false">
-      <!-- 目录工具条：面包屑 + 新建文件夹 -->
+      <!-- 目录工具条：左=面包屑（筛选/定位），右=按钮（上传、新建文件夹） -->
       <div v-if="folderNavEnabled" class="folder-bar">
         <div class="crumbs">
           <button class="crumb" type="button" @click="goToBreadcrumb(null)">
@@ -277,11 +329,28 @@ onMounted(() => {
             </button>
           </template>
         </div>
-        <n-button v-if="scope === 'mine'" size="small" secondary @click="openCreateFolder">
-          <template #icon><n-icon><create-outline /></n-icon></template>
-          新建文件夹
-        </n-button>
+        <!-- 上传入口：拖拽之外留一个按钮（移动端没有拖拽操作） -->
+        <div v-if="scope === 'mine'" class="folder-bar__tools">
+          <n-button type="primary" :disabled="uploadDisabled" @click="filePicker?.click()">
+            <template #icon><n-icon><cloud-upload-outline /></n-icon></template>
+            上传文件
+          </n-button>
+          <n-button secondary @click="openCreateFolder">
+            <template #icon><n-icon><create-outline /></n-icon></template>
+            新建文件夹
+          </n-button>
+        </div>
       </div>
+
+      <!-- 上传已暂停：必须说明原因，否则用户不知道为什么拖不进去 -->
+      <n-alert
+        v-if="scope === 'mine' && uploadDisabled"
+        class="files-card__notice"
+        type="warning"
+        title="上传已暂停"
+      >
+        管理员已暂停上传功能。
+      </n-alert>
 
       <!-- 子目录卡片 -->
       <ul v-if="folders.length" class="folder-grid">
@@ -309,12 +378,15 @@ onMounted(() => {
         </li>
       </ul>
 
-      <!-- 上传面板只出现在「我的文件」：它上传到的就是当前所在目录 -->
-      <UploadPanel
+      <!-- 上传队列只出现在「我的文件」：上传目标就是当前所在目录 -->
+      <UploadQueue
         v-if="scope === 'mine'"
         class="files-card__upload"
-        :folder-id="folderId"
-        @uploaded="reload"
+        :tasks="uploadTasks"
+        @cancel="cancelUpload"
+        @retry="retryUpload"
+        @remove="removeUpload"
+        @clear-finished="clearFinishedUploads"
       />
 
       <n-empty
@@ -363,6 +435,29 @@ onMounted(() => {
         </div>
       </template>
     </n-modal>
+
+    <!--
+      点击选择的原生文件输入：隐藏但由「上传文件」按钮触发。
+      为什么不用 n-upload：它自带虚线拖拽框，而需求是整个页面都能拖入，
+      再摆一个拖拽区只会让人以为只有框里能拖。
+    -->
+    <input
+      v-if="scope === 'mine'"
+      ref="filePicker"
+      class="file-picker"
+      type="file"
+      multiple
+      tabindex="-1"
+      aria-hidden="true"
+      @change="onPickFiles"
+    />
+
+    <!-- 整页拖放：拖到「我的文件」任意位置松手即上传 -->
+    <PageDropZone
+      v-if="dropEnabled"
+      :disabled="uploadDisabled"
+      @files="onDropFiles"
+    />
   </div>
 </template>
 
@@ -390,6 +485,23 @@ onMounted(() => {
   gap: var(--space-sm);
   margin-bottom: var(--space-md);
   min-width: 0;
+}
+
+/* 工具条右侧：上传与新建文件夹并排，窄屏一起换行 */
+.folder-bar__tools {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+/* 提示条与文件列表之间的间距，避免文字贴住目录卡片 */
+.files-card__notice {
+  margin-bottom: var(--space-md);
+}
+
+/* 隐藏的原生文件输入：只作为「上传文件」按钮的触发器，不占版面 */
+.file-picker {
+  display: none;
 }
 
 .crumbs {

@@ -220,18 +220,19 @@ onMounted(load)
 
 <template>
   <n-space vertical :size="14">
-    <n-card :bordered="false" size="small" style="border-radius: 8px">
+    <n-card class="card-surface" :bordered="false">
       <div class="section-head" :class="{ 'section-head--stack': isMobile }">
-        <div class="section-head__title">
-          <n-tag size="small" :bordered="false">{{ total }} 个账号</n-tag>
-        </div>
-        <div class="user-toolbar">
+        <!-- 左：计数 + 搜索；右：主操作按钮 -->
+        <div class="section-head__main">
+          <n-tag :bordered="false">{{ total }} 个账号</n-tag>
           <n-input
             v-model:value="keyword"
             placeholder="搜索工号或姓名"
             clearable
             @keyup.enter="((page = 1), load())"
           />
+        </div>
+        <div class="section-head__actions">
           <n-button type="primary" @click="showCreate = true">
             <template #icon>
               <n-icon><add-outline /></n-icon>
@@ -432,15 +433,8 @@ onMounted(load)
 </template>
 
 <style scoped>
-.user-toolbar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-}
-
-.user-toolbar :deep(.n-input) {
-  width: 220px;
+.section-head__main :deep(.n-input) {
+  width: 240px;
 }
 
 .user-cards {
@@ -519,11 +513,13 @@ onMounted(load)
     flex-direction: column;
   }
 
-  .user-toolbar {
+  .section-head--stack .section-head__main,
+  .section-head--stack .section-head__actions {
     width: 100%;
+    margin-left: 0;
   }
 
-  .user-toolbar :deep(.n-input) {
+  .section-head--stack .section-head__main :deep(.n-input) {
     flex: 1;
     width: auto;
   }
