@@ -137,6 +137,10 @@ export interface OrphanReport {
 export interface FileQuery {
   scope?: 'all' | 'mine'
   owner_id?: number
+  /** 只看某个文件夹内的文件。 */
+  folder_id?: number
+  /** 只看根目录下的文件（folder_id=0 本身是合法值，故单独用开关表达）。 */
+  folder_root?: boolean
   q?: string
   ext?: string
   page?: number

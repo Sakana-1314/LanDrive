@@ -23,11 +23,13 @@ func (h *Handler) ListFiles(c *gin.Context) {
 	// folder_id 指定时只看该目录；folder_root=1 表示只看根目录（不传则不按目录过滤）。
 	// 两者互斥：同时传时以 folder_id 为准。
 	opt := files.ListOptions{
-		Actor:          currentUser(c),
-		Scope:          strings.TrimSpace(c.Query("scope")),
-		OwnerID:        queryInt64(c, "owner_id", 0),
-		FolderID:       queryInt64(c, "folder_id", 0),
-		FolderRootOnly: strings.TrimSpace(c.Query("folder_root")) == "1",
+		Actor:    currentUser(c),
+		Scope:    strings.TrimSpace(c.Query("scope")),
+		OwnerID:  queryInt64(c, "owner_id", 0),
+		FolderID: queryInt64(c, "folder_id", 0),
+		// 接受 "1" 与 "true"：axios 会把布尔 true 序列化成 "true"，
+		// 只认 "1" 会让前端传了却没生效（静默失效最难查）。
+		FolderRootOnly: isTruthyQuery(c.Query("folder_root")),
 		Status:         model.StatusActive,
 		Keyword:        c.Query("q"),
 		Ext:            c.Query("ext"),
@@ -124,6 +126,15 @@ func (h *Handler) PreviewInfo(c *gin.Context) {
 		"content_url": fmt.Sprintf("/api/files/%d/content", f.ID),
 		"note":        previewNote(kind, f.Ext),
 	})
+}
+
+// isTruthyQuery 判定查询参数是否为真值（1/true/yes）。
+func isTruthyQuery(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 func previewNote(kind, ext string) string {

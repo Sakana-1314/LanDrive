@@ -382,12 +382,15 @@ export async function uploadConfig(): Promise<UploadConfig> {
 export async function initUpload(
   fileName: string,
   fileSize: number,
-  sha256?: string
+  sha256?: string,
+  folderId?: number
 ): Promise<UploadSession> {
   const { data } = await http.post<UploadSession>('/uploads/init', {
     file_name: fileName,
     file_size: fileSize,
-    sha256: sha256 || ''
+    sha256: sha256 || '',
+    // 0/undefined 表示上传到用户根目录
+    folder_id: folderId || 0
   })
   return data
 }
