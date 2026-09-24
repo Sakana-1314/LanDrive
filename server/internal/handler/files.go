@@ -109,7 +109,7 @@ func (h *Handler) PreviewInfo(c *gin.Context) {
 		failErr(c, err, "查询文件失败")
 		return
 	}
-	kind := previewKind(f.Ext)
+	kind := storage.PreviewKind(f.Ext)
 	ok(c, gin.H{
 		"id":          f.ID,
 		"name":        f.OriginalNam,
@@ -120,44 +120,6 @@ func (h *Handler) PreviewInfo(c *gin.Context) {
 		"content_url": fmt.Sprintf("/api/files/%d/content", f.ID),
 		"note":        previewNote(kind, f.Ext),
 	})
-}
-
-// previewKind 判定前端预览方式。
-//
-// 与 storage.IsInlinePreviewable 保持一致：只有服务端允许内联的类型才会
-// 走浏览器原生渲染（pdf/图片/音视频）；其余类型即使前端能解析，也一律
-// 以附件形式下发，避免同源脚本执行风险（例如 SVG、HTML）。
-func previewKind(ext string) string {
-	e := storage.NormalizeExt(ext)
-	switch e {
-	// 纯前端库解析，服务端按附件下发，前端取 blob 后本地渲染。
-	case ".docx":
-		return "docx"
-	case ".xlsx":
-		return "xlsx"
-	case ".pptx":
-		return "pptx"
-	}
-	if !storage.IsInlinePreviewable(e) {
-		// 旧版 Office 二进制格式给出更明确的提示。
-		if e == ".doc" || e == ".xls" || e == ".ppt" {
-			return "legacy-office"
-		}
-		if storage.IsText(e) {
-			return "text"
-		}
-		return "unsupported"
-	}
-	switch e {
-	case ".pdf":
-		return "pdf"
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff":
-		return "image"
-	case ".mp4", ".webm", ".mov", ".ogg":
-		return "video"
-	default:
-		return "audio"
-	}
 }
 
 func previewNote(kind, ext string) string {
