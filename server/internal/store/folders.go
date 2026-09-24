@@ -8,14 +8,19 @@ import (
 	"lan-drive/internal/model"
 )
 
-const folderCols = `f.id, f.owner_id, f.parent_id, f.name, f.path, f.created_at, f.updated_at`
+// folderCols 带上属主工号：目录的磁盘路径是 users/<工号>/<path>，
+// 任何需要拼磁盘路径的地方（分享解析、目录下载、改名）都要用到它，
+// 少了它就会拼出 users//... 这种非法路径。
+const folderCols = `f.id, f.owner_id, f.parent_id, f.name, f.path, f.created_at, f.updated_at,
+	u.name, u.employee_no`
 
 func scanFolder(sc interface {
 	Scan(dest ...any) error
 }) (*model.Folder, error) {
 	var f model.Folder
 	var parent sql.NullInt64
-	if err := sc.Scan(&f.ID, &f.OwnerID, &parent, &f.Name, &f.Path, &f.CreatedAt, &f.UpdatedAt); err != nil {
+	if err := sc.Scan(&f.ID, &f.OwnerID, &parent, &f.Name, &f.Path, &f.CreatedAt, &f.UpdatedAt,
+		&f.OwnerName, &f.OwnerEmployeeNo); err != nil {
 		return nil, err
 	}
 	f.ParentID = nullID(parent)
@@ -45,7 +50,7 @@ func (s *Store) CreateFolder(ctx context.Context, f *model.Folder) error {
 
 // GetFolder 按主键查询。
 func (s *Store) GetFolder(ctx context.Context, id int64) (*model.Folder, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+folderCols+` FROM folders f WHERE f.id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+folderCols+` FROM folders f JOIN users u ON u.id = f.owner_id WHERE f.id = ?`, id)
 	f, err := scanFolder(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -64,14 +69,19 @@ func (s *Store) CountFoldersByOwner(ctx context.Context, ownerID int64) (int64, 
 // 附带每个目录的直接文件数与占用，便于前端直接展示。
 func (s *Store) ListChildFolders(ctx context.Context, ownerID int64, parentID *int64) ([]model.Folder, error) {
 	// parent_id 可空，不能用 = NULL 比较，按情况构造条件。
-	cond, arg := "f.parent_id IS NULL", any(nil)
+	// 注意参数顺序：这里的 ? 都在 SELECT 的 JOIN 子查询里，
+	// 而 WHERE 中的 parentID 参数必须排在最后，与 SQL 中出现的顺序一致。
+	cond := "f.parent_id IS NULL"
+	whereArgs := []any{}
 	if parentID != nil {
-		cond, arg = "f.parent_id = ?", *parentID
+		cond = "f.parent_id = ?"
+		whereArgs = append(whereArgs, *parentID)
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+folderCols+`,
 			COALESCE(fc.cnt, 0), COALESCE(fc.bytes, 0), COALESCE(sc.cnt, 0)
 		 FROM folders f
+		 JOIN users u ON u.id = f.owner_id
 		 LEFT JOIN (
 			SELECT folder_id, COUNT(*) AS cnt, COALESCE(SUM(size_bytes),0) AS bytes
 			FROM files WHERE owner_id = ? AND status = ? GROUP BY folder_id
@@ -81,7 +91,7 @@ func (s *Store) ListChildFolders(ctx context.Context, ownerID int64, parentID *i
 		 ) sc ON sc.parent_id = f.id
 		 WHERE f.owner_id = ? AND `+cond+`
 		 ORDER BY f.name ASC`,
-		append([]any{ownerID, model.StatusActive, ownerID}, arg)...)
+		append([]any{ownerID, model.StatusActive, ownerID}, whereArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +101,9 @@ func (s *Store) ListChildFolders(ctx context.Context, ownerID int64, parentID *i
 	for rows.Next() {
 		var f model.Folder
 		var parent sql.NullInt64
+		// 顺序必须与 folderCols + 3 个聚合列一致。
 		if err := rows.Scan(&f.ID, &f.OwnerID, &parent, &f.Name, &f.Path, &f.CreatedAt, &f.UpdatedAt,
+			&f.OwnerName, &f.OwnerEmployeeNo,
 			&f.FileCount, &f.UsedBytes, &f.SubFolderCount); err != nil {
 			return nil, err
 		}
@@ -106,7 +118,7 @@ func (s *Store) ListChildFolders(ctx context.Context, ownerID int64, parentID *i
 // ListAllFoldersByOwner 返回某人的全部目录（用于构建面包屑与校验归属）。
 func (s *Store) ListAllFoldersByOwner(ctx context.Context, ownerID int64) ([]model.Folder, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+folderCols+` FROM folders f WHERE f.owner_id = ? ORDER BY f.path ASC`, ownerID)
+		`SELECT `+folderCols+` FROM folders f JOIN users u ON u.id = f.owner_id WHERE f.owner_id = ? ORDER BY f.path ASC`, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +146,7 @@ func (s *Store) ListFolderAncestors(ctx context.Context, ownerID, folderID int64
 		return nil, ErrNotFound
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+folderCols+` FROM folders f
+		`SELECT `+folderCols+` FROM folders f JOIN users u ON u.id = f.owner_id
 		 WHERE f.owner_id = ? AND (f.path = ? OR ? LIKE CONCAT(f.path, '/%'))
 		 ORDER BY LENGTH(f.path) ASC`,
 		ownerID, target.Path, target.Path)
@@ -155,14 +167,18 @@ func (s *Store) ListFolderAncestors(ctx context.Context, ownerID, folderID int64
 
 // FolderNameExists 判断同一父目录下是否已有同名文件夹（excludeID 用于改名时排除自己）。
 func (s *Store) FolderNameExists(ctx context.Context, ownerID int64, parentID *int64, name string, excludeID int64) (bool, error) {
-	cond, arg := "parent_id IS NULL", any(nil)
+	// 条件与占位符必须成对出现：parentID 为 nil 时用 IS NULL（**不能**再追加参数，
+	// 否则占位符与参数个数不匹配，报 "expected N arguments, got M"）。
+	cond := "parent_id IS NULL"
+	args := []any{ownerID, name, excludeID}
 	if parentID != nil {
-		cond, arg = "parent_id = ?", *parentID
+		cond = "parent_id = ?"
+		args = append(args, *parentID)
 	}
 	var n int64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM folders WHERE owner_id = ? AND name = ? AND id <> ? AND `+cond,
-		append([]any{ownerID, name, excludeID}, arg)...).Scan(&n)
+		args...).Scan(&n)
 	if err != nil {
 		return false, err
 	}
@@ -204,11 +220,12 @@ func (s *Store) RenameFolderPathWithParent(ctx context.Context, ownerID, folderI
 
 	// 再级联改子孙：把 path 前缀从 oldPath 换成 newPath。
 	// CONCAT + SUBSTRING 而非 REPLACE，避免路径中恰好出现同名片段被误替换。
+	// 同 MoveFilesPathPrefix：偏移按字符算（CHAR_LENGTH），并补回分隔符 '/'。
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE folders
-		 SET path = CONCAT(?, SUBSTRING(path, ?))
+		 SET path = CONCAT(?, '/', SUBSTRING(path, CHAR_LENGTH(?) + 2))
 		 WHERE owner_id = ? AND path LIKE ? AND id <> ?`,
-		newPath, len(oldPath)+1, ownerID, escapeLike(oldPath)+"/%", folderID); err != nil {
+		newPath, oldPath, ownerID, escapeLike(oldPath)+"/%", folderID); err != nil {
 		if isDuplicate(err) {
 			return fmt.Errorf("%w: 目标路径下已存在同名文件夹", ErrConflict)
 		}
@@ -224,10 +241,15 @@ func (s *Store) MoveFilesPathPrefix(ctx context.Context, ownerID int64, oldDirRe
 	if oldDirRel == newDirRel {
 		return nil
 	}
+	// 两个易错点，都实测踩过：
+	//   1. 用 CHAR_LENGTH 而不是 Go 的 len() —— SUBSTRING 在 MySQL 里按**字符**
+	//      计数，len() 是字节数；目录名含中文时用字节偏移会把路径切碎。
+	//   2. CONCAT 时必须补回分隔符 '/'，否则会拼成 "旧名27.txt" 而不是
+	//      "旧名/27.txt"，文件就再也匹配不上自己目录的前缀。
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE files SET rel_path = CONCAT(?, SUBSTRING(rel_path, ?))
+		`UPDATE files SET rel_path = CONCAT(?, '/', SUBSTRING(rel_path, CHAR_LENGTH(?) + 2))
 		 WHERE owner_id = ? AND rel_path LIKE ?`,
-		newDirRel, len(oldDirRel)+1, ownerID, escapeLike(oldDirRel)+"/%")
+		newDirRel, oldDirRel, ownerID, escapeLike(oldDirRel)+"/%")
 	if err != nil && isDuplicate(err) {
 		return fmt.Errorf("%w: 目标位置已存在同名文件", ErrConflict)
 	}
@@ -237,7 +259,7 @@ func (s *Store) MoveFilesPathPrefix(ctx context.Context, ownerID int64, oldDirRe
 // ListFoldersUnderPath 返回某路径及其所有子孙目录（用于目录删除/改名）。
 func (s *Store) ListFoldersUnderPath(ctx context.Context, ownerID int64, path string) ([]model.Folder, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+folderCols+` FROM folders f
+		`SELECT `+folderCols+` FROM folders f JOIN users u ON u.id = f.owner_id
 		 WHERE f.owner_id = ? AND (f.path = ? OR f.path LIKE ?)
 		 ORDER BY LENGTH(f.path) DESC`,
 		ownerID, path, escapeLike(path)+"/%")

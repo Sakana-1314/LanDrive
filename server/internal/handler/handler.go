@@ -21,9 +21,11 @@ import (
 
 	"lan-drive/internal/auth"
 	"lan-drive/internal/files"
+	"lan-drive/internal/folders"
 	"lan-drive/internal/maintain"
 	"lan-drive/internal/model"
 	"lan-drive/internal/settings"
+	"lan-drive/internal/shares"
 	"lan-drive/internal/storage"
 	"lan-drive/internal/store"
 	"lan-drive/internal/upload"
@@ -38,6 +40,8 @@ type Handler struct {
 	st      *storage.Storage
 	set     *settings.Service
 	files   *files.Service
+	folders *folders.Service
+	shares  *shares.Service
 	uploads *upload.Service
 	maint   *maintain.Service
 	tokens  *auth.TokenManager
@@ -52,6 +56,8 @@ type Deps struct {
 	Storage  *storage.Storage
 	Settings *settings.Service
 	Files    *files.Service
+	Folders  *folders.Service
+	Shares   *shares.Service
 	Uploads  *upload.Service
 	Maintain *maintain.Service
 	Tokens   *auth.TokenManager
@@ -64,6 +70,8 @@ func New(d Deps) *Handler {
 		st:      d.Storage,
 		set:     d.Settings,
 		files:   d.Files,
+		folders: d.Folders,
+		shares:  d.Shares,
 		uploads: d.Uploads,
 		maint:   d.Maintain,
 		tokens:  d.Tokens,
