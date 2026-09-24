@@ -48,6 +48,13 @@ const PAGES = [
   '/files/mine',
   // 子 tab 形态（菜单里选中某个用户的目录）
   '/files?owner=2',
+  '/shares',
+  // 分享页是免登录的独立布局（无侧栏顶栏），必须单独查
+  '/s/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  // 失效分支：已过期 / 目标已删除 / 链接无效
+  '/s/cccccccccccccccccccccccccccccccc',
+  '/s/dddddddddddddddddddddddddddddddd',
+  '/s/0000000000000000000000000000dead',
   '/profile',
   '/admin/workbench',
   '/admin/users',
@@ -191,11 +198,23 @@ for (const vp of VIEWPORTS) {
       continue
     }
     // 内页被重定向到登录页 = 没测到目标布局，属于失败而不是通过。
-    if (path !== '/login') {
+    //
+    // 例外：/s/:token 是**免登录**的分享页，它本来就该停在 /s/... 而不要求登录。
+    // （反过来，它若被弹到 /login 就说明免登录路由坏了，此时下面这条断言仍会拦住。）
+    const isPublic = path === '/login' || path.startsWith('/s/')
+    if (!isPublic) {
       const landed = await page.evaluate(() => location.pathname)
       if (landed.startsWith('/login') || landed.startsWith('/network-blocked')) {
         failures++
         problems.push(`${vp.name} ${path}: 被重定向到 ${landed}，未检查到目标页面`)
+        continue
+      }
+    } else if (path.startsWith('/s/')) {
+      // 分享页必须停在 /s/ 上：跑到 /login 说明免登录档失效
+      const landed = await page.evaluate(() => location.pathname)
+      if (!landed.startsWith('/s/')) {
+        failures++
+        problems.push(`${vp.name} ${path}: 免登录分享页被重定向到 ${landed}，免登录路由可能失效`)
         continue
       }
     }

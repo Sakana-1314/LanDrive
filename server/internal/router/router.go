@@ -46,6 +46,14 @@ func New(h *handler.Handler, cfg *config.Config) *gin.Engine {
 		// 认证（登录必须可跨域访问）
 		api.POST("/auth/login", h.Login)
 
+		// ---- 免登录分享访问（第四档：公开）----
+		// 拿到链接的人无需内网账号即可查看/下载，因为分享的用途就是发给外部的人。
+		// 安全边界靠 token 本身：这里**只认 token**，不接受任何 id/路径参数，
+		// 否则等于给了枚举别人文件的入口。
+		api.GET("/s/:token", h.ResolveShare)
+		api.GET("/s/:token/download", h.ShareDownload)
+		api.GET("/s/:token/content", h.SharePreview)
+
 		// 需要登录
 		authed := api.Group("", h.RequireAuth())
 		{
@@ -64,6 +72,18 @@ func New(h *handler.Handler, cfg *config.Config) *gin.Engine {
 			authed.GET("/files/:id/download", h.Download)
 			authed.PATCH("/files/:id", h.RenameFile)
 			authed.DELETE("/files/:id", h.DeleteFile)
+
+			// 文件夹
+			authed.GET("/folders", h.ListFolders)
+			authed.POST("/folders", h.CreateFolder)
+			authed.PATCH("/folders/:id", h.RenameFolder)
+			authed.DELETE("/folders/:id", h.DeleteFolder)
+
+			// 分享：所有人都能看到所有人创建的分享（需求明确要求）
+			authed.GET("/shares", h.ListShares)
+			authed.GET("/shares/options", h.ShareExpireOptions)
+			authed.POST("/shares", h.CreateShare)
+			authed.DELETE("/shares/:id", h.RevokeShare)
 
 			// 分片上传
 			authed.GET("/uploads/config", h.UploadConfig)

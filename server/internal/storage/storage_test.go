@@ -51,6 +51,62 @@ func TestSafeRelRejectsDangerousPaths(t *testing.T) {
 //
 // 工号会直接拼进磁盘路径，所以这里必须比 handler 的宽松校验更严：
 // 一旦放过 ".." 或含分隔符的工号，就会写到数据根目录之外。
+// TestSanitizeFolderName 覆盖文件夹名清洗。
+//
+// 文件夹名会被当作**单层路径段**拼进磁盘路径，因此必须：
+//   - 去掉斜杠与反斜杠（否则用户输入 "a/b" 会意外造出层级）；
+//   - 拒绝 "." / ".."（目录穿越）；
+//   - 去掉控制字符与 Windows 保留字符。
+func TestSanitizeFolderName(t *testing.T) {
+	ok := map[string]string{
+		"报表":        "报表",
+		"2026 年度":   "2026 年度",
+		"a-b_c.txt": "a-b_c.txt",
+		"  空格  ":    "空格",
+		"a/b":       "b", // 只取最后一段，不造层级
+		`a\\b`:      "b",
+		"a:b":       "ab", // 冒号是 Windows 保留字符，去掉
+		"a*b?c":     "abc",
+		"..":        "",
+		".":         "",
+		"":          "",
+		"   ":       "",
+		"a.txt.":    "a.txt",
+	}
+	for in, want := range ok {
+		if got := SanitizeFolderName(in); got != want {
+			t.Fatalf("SanitizeFolderName(%q) = %q，期望 %q", in, got, want)
+		}
+	}
+}
+
+// TestFolderDirRel 覆盖目录相对路径的生成与穿越防护。
+func TestFolderDirRel(t *testing.T) {
+	cases := []struct {
+		userDir, folderPath, want string
+	}{
+		{"users/1001", "", "users/1001"},
+		{"users/1001", "报表", "users/1001/报表"},
+		{"users/1001", "报表/2026", "users/1001/报表/2026"},
+		{"users/1001", "/报表/", "users/1001/报表"},
+	}
+	for _, c := range cases {
+		got, err := FolderDirRel(c.userDir, c.folderPath)
+		if err != nil {
+			t.Fatalf("FolderDirRel(%q,%q) 出错: %v", c.userDir, c.folderPath, err)
+		}
+		if got != c.want {
+			t.Fatalf("FolderDirRel(%q,%q) = %q，期望 %q", c.userDir, c.folderPath, got, c.want)
+		}
+	}
+	// 穿越必须被拒（SafeRel 会挡住 ..）
+	for _, bad := range []string{"../etc", "报表/../../etc", "a/../../../b"} {
+		if _, err := FolderDirRel("users/1001", bad); err == nil {
+			t.Fatalf("FolderDirRel 应拒绝穿越路径 %q", bad)
+		}
+	}
+}
+
 func TestUserDirName(t *testing.T) {
 	ok := []string{"1001", "admin", "user_01", "A-9", "a.b", "60017212"}
 	for _, in := range ok {

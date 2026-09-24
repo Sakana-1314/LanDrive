@@ -21,6 +21,7 @@ import {
   CreateOutline,
   DownloadOutline,
   EyeOutline,
+  LinkOutline,
   RefreshOutline,
   SearchOutline,
   TrashOutline
@@ -29,6 +30,7 @@ import type { FileItem } from '@/api/types'
 import { extLabel, formatBytes, formatDaysLeft, formatTime, shorten } from '@/utils/format'
 import { extTagType } from '@/utils/theme'
 import { useFileActions } from '@/composables/useFileActions'
+import { useCreateShare } from '@/composables/useCreateShare'
 
 const props = withDefaults(
   defineProps<{
@@ -76,6 +78,20 @@ const actions = useFileActions({
   adminMode: props.adminMode,
   onRefresh: () => emit('refresh')
 })
+const share = useCreateShare()
+
+/**
+ * 分享入口只在**自己上传且未删除**的文件上出现。
+ * 需求规定"只能分享自己的文件"；管理员也走同一条前端规则，
+ * 服务端另有兜底（管理员可分享任意）。
+ */
+function canShare(row: FileItem): boolean {
+  return row.is_mine && row.status === 'active'
+}
+
+function onShare(row: FileItem) {
+  void share.create('file', row.id, row.original_name)
+}
 
 const sortKey = ref('created_at')
 const sortOrder = ref<'asc' | 'desc'>('desc')
@@ -205,6 +221,15 @@ const columns = computed<DataTableColumns<FileItem>>(() => {
           default: () => '下载'
         })
       ]
+
+      if (canShare(row)) {
+        buttons.push(
+          h(NButton, { size: 'small', quaternary: true, type: 'primary', onClick: () => onShare(row) }, {
+            icon: () => h(NIcon, null, { default: () => h(LinkOutline) }),
+            default: () => '分享'
+          })
+        )
+      }
 
       if (props.adminMode) {
         if (row.status === 'trashed') {

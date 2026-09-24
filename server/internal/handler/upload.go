@@ -19,6 +19,8 @@ func (h *Handler) InitUpload(c *gin.Context) {
 		FileName string `json:"file_name"`
 		FileSize int64  `json:"file_size"`
 		SHA256   string `json:"sha256"`
+		// FolderID 目标文件夹；0/省略 = 用户根目录。
+		FolderID int64 `json:"folder_id"`
 	}
 	if !bindJSON(c, &req) {
 		return
@@ -37,6 +39,7 @@ func (h *Handler) InitUpload(c *gin.Context) {
 		FileName:  req.FileName,
 		SizeBytes: req.FileSize,
 		SHA256:    req.SHA256,
+		FolderID:  req.FolderID,
 	})
 	if err != nil {
 		// init 阶段不合格的请求不会产生任何磁盘写入。

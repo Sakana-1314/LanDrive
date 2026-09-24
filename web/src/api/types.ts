@@ -137,10 +137,90 @@ export interface OrphanReport {
 export interface FileQuery {
   scope?: 'all' | 'mine'
   owner_id?: number
+  /** 只看某个文件夹内的文件。 */
+  folder_id?: number
+  /** 只看根目录下的文件（folder_id=0 本身是合法值，故单独用开关表达）。 */
+  folder_root?: boolean
   q?: string
   ext?: string
   page?: number
   page_size?: number
   sort?: string
   order?: 'asc' | 'desc'
+}
+
+/** 文件夹。每人一棵树，path 相对"用户根目录"（磁盘对应 users/<工号>/<path>）。 */
+export interface Folder {
+  id: number
+  owner_id: number
+  parent_id: number | null
+  name: string
+  path: string
+  created_at: string
+  updated_at: string
+  owner_name: string
+  owner_employee_no: string
+  /** 该目录**直接**包含的文件数（不含子目录） */
+  file_count: number
+  used_bytes: number
+  sub_folder_count: number
+}
+
+/** 一层目录的内容（含面包屑）。 */
+export interface FolderListing {
+  owner_id: number
+  folder_id: number
+  folders: Folder[]
+  breadcrumb: Folder[]
+  current: Folder | null
+}
+
+export type ShareTargetType = 'file' | 'folder'
+
+/** 一条分享链接。 */
+export interface Share {
+  id: number
+  token: string
+  owner_id: number
+  target_type: ShareTargetType
+  file_id: number | null
+  folder_id: number | null
+  /** null 表示永久有效 */
+  expire_days: number | null
+  expires_at: string | null
+  view_count: number
+  created_at: string
+  updated_at: string
+  owner_name: string
+  owner_employee_no: string
+  target_name: string
+  target_size_bytes: number
+  /** 目标已被删除（软删/回收站）：界面要提示"分享的文件已被删除" */
+  target_deleted: boolean
+  expired: boolean
+}
+
+/**
+ * 免登录访问分享的结果状态。
+ *
+ * 必须区分 expired / deleted / notfound 三种：文案不同，
+ * 用户需要知道是"过期了"还是"文件被删了"还是"链接是错的"。
+ */
+export type ShareResolveStatus = 'ok' | 'expired' | 'deleted' | 'notfound'
+
+export interface ShareResolved {
+  status: ShareResolveStatus
+  name: string
+  size_bytes: number
+  mime: string
+  ext: string
+  kind: string
+  file_count: number
+  total_bytes: number
+  owner_name: string
+  target_type: ShareTargetType | ''
+  expire_days: number | null
+  expires_at: string | null
+  created_at: string | null
+  view_count: number
 }

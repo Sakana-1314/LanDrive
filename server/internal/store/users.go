@@ -124,7 +124,7 @@ func (s *Store) ListUsers(ctx context.Context, q string, page, pageSize int) ([]
 		COALESCE(f.cnt, 0) AS file_count, COALESCE(f.bytes, 0) AS used_bytes
 		FROM users u
 		LEFT JOIN (
-			SELECT owner_id, COUNT(*) AS cnt, COALESCE(SUM(size_bytes), 0) AS bytes
+			SELECT owner_id, COUNT(*) AS cnt, CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) AS bytes
 			FROM files WHERE status = ? GROUP BY owner_id
 		) f ON f.owner_id = u.id
 		` + where + ` ORDER BY u.id ASC LIMIT ? OFFSET ?`
@@ -256,7 +256,7 @@ func (s *Store) ListOwners(ctx context.Context, viewerID int64) ([]model.OwnerAg
 			(p.owner_user_id IS NOT NULL) AS pinned
 		 FROM users u
 		 LEFT JOIN (
-			SELECT owner_id, COUNT(*) AS cnt, COALESCE(SUM(size_bytes), 0) AS bytes
+			SELECT owner_id, COUNT(*) AS cnt, CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) AS bytes
 			FROM files WHERE status = ? GROUP BY owner_id
 		 ) f ON f.owner_id = u.id
 		 LEFT JOIN user_pins p ON p.target_user_id = u.id AND p.owner_user_id = ?

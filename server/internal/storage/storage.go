@@ -152,13 +152,69 @@ func UserDirName(employeeNo string) (string, error) {
 // 入参必须是已通过 UserDirName 校验的工号。
 func UserDirRel(employeeNo string) string { return "users/" + employeeNo }
 
-// FileRel 返回文件最终存储的相对路径（<用户目录>/<fileID><ext>）。
+// FolderDirRel 返回某个文件夹在磁盘上的相对路径（<用户目录>/<folderPath>）。
 //
-// 入参是**用户目录**而不是 owner id：上传会话在创建时就把目标目录记了下来
-// （upload_sessions.dir_rel），合并时沿用同一个值即可。这样存量数据
-// （早期版本按 users/<id> 落盘）无需迁移也能继续正确写入自己的目录。
-func FileRel(ownerDirRel string, fileID int64, ext string) string {
-	return fmt.Sprintf("%s/%d%s", ownerDirRel, fileID, NormalizeExt(ext))
+// folderPath 是数据库 folders.path 的值（相对"用户根目录"的规范化路径，
+// 如 "报表/2026"）。空串表示用户根目录本身。
+// 这是**真实磁盘层级**：目录分享/浏览时磁盘上确实存在对应的嵌套目录。
+func FolderDirRel(userDirRel, folderPath string) (string, error) {
+	rel := userDirRel
+	if p := strings.Trim(strings.TrimSpace(folderPath), "/"); p != "" {
+		rel = userDirRel + "/" + p
+	}
+	// 目录名来自用户输入，必须过一遍 SafeRel（拒绝 .. 等穿越）。
+	clean, err := SafeRel(rel)
+	if err != nil {
+		return "", err
+	}
+	return clean, nil
+}
+
+// SanitizeFolderName 清洗用户输入的文件夹名，使其可安全用作单层路径段。
+//
+// 与文件名的区别：文件夹名**不能**含斜杠（那会意外产生层级），
+// 也不能是 "." / ".."（会穿越目录）。返回空串表示输入不可用。
+func SanitizeFolderName(name string) string {
+	// 先把各种分隔符统一成斜杠，再只取最后一段 —— "a/b" 会被视为用户
+	// 误输入了层级，这里退化成 "b" 而不是创建两层。
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = path.Base(name)
+	// 控制字符与 Windows 保留字符一并去掉。
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return -1
+		}
+		return r
+	}, name)
+	name = strings.Trim(name, " .")
+	if name == "" || name == "." || name == ".." {
+		return ""
+	}
+	if len(name) > MaxNameLen {
+		for len(name) > MaxNameLen {
+			_, size := utf8.DecodeLastRuneInString(name)
+			name = name[:len(name)-size]
+		}
+		name = strings.TrimRight(name, " .")
+	}
+	return name
+}
+
+// FileRel 返回文件最终存储的相对路径（<目录>/<fileID><ext>）。
+//
+// 第一个入参是**文件所在的目录相对路径**（可能是用户根目录，也可能是某个
+// 文件夹目录）：上传会话在创建时就把目标目录记了下来（upload_sessions.dir_rel），
+// 合并时沿用同一个值即可。这样存量数据（早期按 users/<id> 落盘）无需迁移
+// 也能继续正确写入自己的目录。
+//
+// 磁盘文件名一律是 fileID + 扩展名，与原始文件名无关 —— 这是"改名/移动
+// 不影响已有分享链接"的基础（链接指向记录，路径由记录解析）。
+func FileRel(dirRel string, fileID int64, ext string) string {
+	return fmt.Sprintf("%s/%d%s", dirRel, fileID, NormalizeExt(ext))
 }
 
 // ChunkRel 返回一个分片文件的相对路径（tmp/chunks/<uploadID>/<idx>.part）。
@@ -281,6 +337,52 @@ func (s *Storage) EnsureUserDir(employeeNo string) (string, error) {
 		return "", fmt.Errorf("创建用户目录失败: %w", err)
 	}
 	return rel, nil
+}
+
+// EnsureDir 创建（含父级）某个相对目录。
+func (s *Storage) EnsureDir(rel string) error {
+	abs, err := s.Abs(rel)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return fmt.Errorf("创建目录失败: %w", err)
+	}
+	return nil
+}
+
+// RenameDir 把相对目录 from 移动到 to。
+//
+// 用于文件夹改名/移动：磁盘是真实层级，所以数据库 path 变了磁盘也必须跟着动，
+// 否则文件会"记录在 A、实际在 B"，与一致性扫描冲突。
+// 目标已存在时返回错误，避免把两个目录合并成一层（那会丢结构）。
+func (s *Storage) RenameDir(from, to string) error {
+	if from == to {
+		return nil
+	}
+	fabs, err := s.Abs(from)
+	if err != nil {
+		return err
+	}
+	tabs, err := s.Abs(to)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(fabs); os.IsNotExist(err) {
+		// 源目录不存在（例如目录下还没有任何文件）：直接建出目标即可。
+		return os.MkdirAll(tabs, 0o755)
+	}
+	if _, err := os.Stat(tabs); err == nil {
+		return fmt.Errorf("%w: 目标目录已存在", ErrInvalidRel)
+	}
+	// 目标父目录必须先存在，否则 Rename 会失败。
+	if err := os.MkdirAll(filepath.Dir(tabs), 0o755); err != nil {
+		return fmt.Errorf("创建目标父目录失败: %w", err)
+	}
+	if err := os.Rename(fabs, tabs); err != nil {
+		return fmt.Errorf("移动目录失败: %w", err)
+	}
+	return nil
 }
 
 // EnsureParent 为某个相对路径创建父目录。
@@ -624,6 +726,45 @@ func IsInlinePreviewable(ext string) bool {
 		return true
 	}
 	return false
+}
+
+// PreviewKind 判定前端该如何预览该扩展名的文件。
+//
+// 放在 storage 而不是 handler：分享的免登录预览与登录预览必须用**同一套**
+// 规则 —— 两处各写一份迟早会走样（例如一边放行了 svg 内联）。
+// 安全约定：只有 IsInlinePreviewable 允许内联的类型才交给浏览器原生渲染；
+// 其余（含 SVG/HTML）一律 unsupported，由前端改走下载。
+func PreviewKind(ext string) string {
+	e := NormalizeExt(ext)
+	switch e {
+	// 纯前端库解析，服务端按附件下发，前端取 blob 后本地渲染。
+	case ".docx":
+		return "docx"
+	case ".xlsx":
+		return "xlsx"
+	case ".pptx":
+		return "pptx"
+	}
+	if !IsInlinePreviewable(e) {
+		// 旧版 Office 二进制格式给出更明确的提示。
+		if e == ".doc" || e == ".xls" || e == ".ppt" {
+			return "legacy-office"
+		}
+		if IsText(e) {
+			return "text"
+		}
+		return "unsupported"
+	}
+	switch e {
+	case ".pdf":
+		return "pdf"
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff":
+		return "image"
+	case ".mp4", ".webm", ".mov", ".ogg":
+		return "video"
+	default:
+		return "audio"
+	}
 }
 
 // IsText 报告该扩展名是否按纯文本展示。
