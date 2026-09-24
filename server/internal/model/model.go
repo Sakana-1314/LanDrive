@@ -60,8 +60,11 @@ func (u *User) Public() *User {
 
 // File 一条文件记录，严格对应磁盘上一个文件。
 type File struct {
-	ID          int64      `json:"id"`
-	OwnerID     int64      `json:"owner_id"`
+	ID      int64 `json:"id"`
+	OwnerID int64 `json:"owner_id"`
+	// FolderID 所属文件夹；0 表示用户根目录（故意用 0 而不是 NULL，
+	// 详见 0003 迁移里的说明）。
+	FolderID    int64      `json:"folder_id"`
 	OriginalNam string     `json:"original_name"`
 	Ext         string     `json:"ext"`
 	SizeBytes   int64      `json:"size_bytes"`
@@ -88,20 +91,22 @@ type File struct {
 
 // UploadSession 分片上传会话。
 type UploadSession struct {
-	ID            string    `json:"upload_id"`
-	OwnerID       int64     `json:"-"`
-	OriginalName  string    `json:"original_name"`
-	Ext           string    `json:"ext"`
-	SizeBytes     int64     `json:"size_bytes"`
-	ChunkSize     int       `json:"chunk_size"`
-	TotalChunks   int       `json:"total_chunks"`
-	ReceivedBytes int64     `json:"received_bytes"`
-	Status        string    `json:"status"`
-	DirRel        string    `json:"-"`
-	SHA256        string    `json:"-"`
-	FileID        *int64    `json:"file_id"` // 合并成功后写入，用于幂等返回
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string `json:"upload_id"`
+	OwnerID       int64  `json:"-"`
+	OriginalName  string `json:"original_name"`
+	Ext           string `json:"ext"`
+	SizeBytes     int64  `json:"size_bytes"`
+	ChunkSize     int    `json:"chunk_size"`
+	TotalChunks   int    `json:"total_chunks"`
+	ReceivedBytes int64  `json:"received_bytes"`
+	Status        string `json:"status"`
+	DirRel        string `json:"-"`
+	// FolderID 目标文件夹（0=根目录）；complete 时写入文件记录。
+	FolderID  int64     `json:"folder_id"`
+	SHA256    string    `json:"-"`
+	FileID    *int64    `json:"file_id"` // 合并成功后写入，用于幂等返回
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// Uploaded 是已落盘的分片序号（升序）。由 handler 填充。
 	Uploaded []int `json:"uploaded"`
@@ -138,3 +143,78 @@ type OwnerAggregate struct {
 	// 置顶是每人各自一份（user_pins），不是全局标记。
 	Pinned bool `json:"pinned"`
 }
+
+// 目录状态。删除目录用**软删除**（保留行、path 加墓碑后缀），
+// 而不是删行：分享指向目录记录，删行会让"文件夹已被删除"退化成"链接无效"。
+const (
+	FolderActive  = "active"
+	FolderDeleted = "deleted"
+)
+
+// Folder 一个文件夹。每人一棵树，path 是相对"用户根目录"的规范化路径。
+type Folder struct {
+	ID        int64     `json:"id"`
+	OwnerID   int64     `json:"owner_id"`
+	ParentID  *int64    `json:"parent_id"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// Tombstone 为真表示这是一条已删除目录的记录（path 带墓碑后缀）。
+	// 只有分享解析会用它判断"文件夹已被删除"，正常列表一律过滤掉。
+	Tombstone bool `json:"-"`
+
+	// 以下由服务层填充，不落表。
+	OwnerName       string `json:"owner_name"`
+	OwnerEmployeeNo string `json:"owner_employee_no"`
+	// FileCount / UsedBytes 是该目录**直接**包含的文件（不含子目录）。
+	FileCount int64 `json:"file_count"`
+	UsedBytes int64 `json:"used_bytes"`
+	// SubFolderCount 直接子目录数。
+	SubFolderCount int64 `json:"sub_folder_count"`
+}
+
+// Share 一条分享链接。
+//
+// 指向的是**记录**（FileID / FolderID）而不是磁盘路径：
+// 因此文件改名或移动后链接依然可用，而文件被删除后能明确回复"已被删除"，
+// 记录被彻底清除时靠外键级联把分享一并删掉。
+type Share struct {
+	ID         int64  `json:"id"`
+	Token      string `json:"token"`
+	OwnerID    int64  `json:"owner_id"`
+	TargetType string `json:"target_type"` // file / folder
+	FileID     *int64 `json:"file_id"`
+	FolderID   *int64 `json:"folder_id"`
+	// ExpireDays 为 nil 表示永久；expires_at 为 nil 表示永久。
+	ExpireDays *int       `json:"expire_days"`
+	ExpiresAt  *time.Time `json:"expires_at"`
+	ViewCount  int64      `json:"view_count"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+
+	// 以下由服务层填充，便于前端列表直接展示。
+	OwnerName       string `json:"owner_name"`
+	OwnerEmployeeNo string `json:"owner_employee_no"`
+	// TargetName 目标名（文件名或文件夹名）。
+	TargetName string `json:"target_name"`
+	// TargetSizeBytes 仅文件分享有意义；目录分享为 0。
+	TargetSizeBytes int64 `json:"target_size_bytes"`
+	// TargetDeleted 目标是否已被删除（软删/回收站）。前端据此提示
+	// 「分享的文件已被删除」，而不是笼统地说链接失效。
+	TargetDeleted bool `json:"target_deleted"`
+	// Expired 由服务层按当前时间计算，避免前端各自判断时区。
+	Expired bool `json:"expired"`
+}
+
+// ShareTargetType 分享目标类型。
+const (
+	ShareTargetFile   = "file"
+	ShareTargetFolder = "folder"
+)
+
+// ShareExpireOptions 允许的有效期（天）。nil 表示永久。
+// 放在 model 里是因为前后端与校验都要用同一份定义。
+var ShareExpireOptions = []int{1, 3, 7, 30}

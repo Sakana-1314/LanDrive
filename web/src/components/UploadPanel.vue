@@ -6,7 +6,7 @@
 //
 // 文案取舍：不显示「最大 500 MB / 不限类型」这类策略角标 —— 超限时校验会
 // 直接报错，平时不需要占位。仅"上传已暂停"属于异常态，必须说清。
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NAlert,
@@ -24,6 +24,17 @@ import { errMsg, uploadConfig } from '@/api'
 import { applyUploadConfig, state as userState, uploadState, validateFile } from '@/stores/user'
 import { UploadManager, sweepPersisted, type UploadTask } from '@/utils/upload'
 import { formatBytes, formatDuration, formatSpeed } from '@/utils/format'
+
+const props = withDefaults(
+  defineProps<{
+    /**
+     * 上传目标文件夹（0 = 用户根目录）。
+     * 由 FilesView 传入当前所在目录：在目录里拖文件就上传到该目录。
+     */
+    folderId?: number
+  }>(),
+  { folderId: 0 }
+)
 
 const emit = defineEmits<{ (e: 'uploaded'): void }>()
 
@@ -52,8 +63,16 @@ function ensureManager(): UploadManager {
       }
     })
   }
+  // 首次创建时同步一次当前目录。
+  manager.setFolderId(props.folderId || 0)
   return manager
 }
+
+// 用户在目录间切换时更新目标目录；不重建 manager，避免丢掉进行中的队列。
+watch(
+  () => props.folderId,
+  (v) => ensureManager().setFolderId(v || 0)
+)
 
 async function loadConfig() {
   try {

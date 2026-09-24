@@ -21,9 +21,11 @@ import (
 
 	"lan-drive/internal/auth"
 	"lan-drive/internal/files"
+	"lan-drive/internal/folders"
 	"lan-drive/internal/maintain"
 	"lan-drive/internal/model"
 	"lan-drive/internal/settings"
+	"lan-drive/internal/shares"
 	"lan-drive/internal/storage"
 	"lan-drive/internal/store"
 	"lan-drive/internal/upload"
@@ -38,6 +40,8 @@ type Handler struct {
 	st      *storage.Storage
 	set     *settings.Service
 	files   *files.Service
+	folders *folders.Service
+	shares  *shares.Service
 	uploads *upload.Service
 	maint   *maintain.Service
 	tokens  *auth.TokenManager
@@ -52,6 +56,8 @@ type Deps struct {
 	Storage  *storage.Storage
 	Settings *settings.Service
 	Files    *files.Service
+	Folders  *folders.Service
+	Shares   *shares.Service
 	Uploads  *upload.Service
 	Maintain *maintain.Service
 	Tokens   *auth.TokenManager
@@ -64,6 +70,8 @@ func New(d Deps) *Handler {
 		st:      d.Storage,
 		set:     d.Settings,
 		files:   d.Files,
+		folders: d.Folders,
+		shares:  d.Shares,
 		uploads: d.Uploads,
 		maint:   d.Maintain,
 		tokens:  d.Tokens,
@@ -101,8 +109,12 @@ func failErr(c *gin.Context, err error, fallback string) {
 		fail(c, http.StatusConflict, err.Error())
 	case errors.Is(err, files.ErrCannotPinSelf):
 		fail(c, http.StatusBadRequest, err.Error())
-	case errors.Is(err, files.ErrForbidden), errors.Is(err, upload.ErrForbidden):
+	case errors.Is(err, files.ErrForbidden), errors.Is(err, upload.ErrForbidden),
+		errors.Is(err, folders.ErrForbidden), errors.Is(err, shares.ErrForbidden):
 		fail(c, http.StatusForbidden, err.Error())
+	case errors.Is(err, folders.ErrInvalidName), errors.Is(err, shares.ErrInvalidTarget),
+		errors.Is(err, shares.ErrBadExpire):
+		fail(c, http.StatusBadRequest, err.Error())
 	case errors.Is(err, upload.ErrTooLarge):
 		fail(c, http.StatusRequestEntityTooLarge, err.Error())
 	case errors.Is(err, upload.ErrBadExt):

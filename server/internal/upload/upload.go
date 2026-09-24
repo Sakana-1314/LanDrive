@@ -65,10 +65,14 @@ func (s *Service) decorateFile(f *model.File, actor *model.User) *model.File {
 
 // InitInput 是 init 请求的业务入参。
 type InitInput struct {
-	Owner      *model.User
-	FileName   string
-	SizeBytes  int64
-	SHA256     string
+	Owner     *model.User
+	FileName  string
+	SizeBytes int64
+	SHA256    string
+	// FolderID 目标文件夹；0 表示用户根目录。
+	// 只收 id 不收路径字符串：路径由服务端从数据库解析，
+	// 避免客户端传入 ../ 之类的穿越路径。
+	FolderID   int64
 	ChunkSizeM int64
 }
 
@@ -121,15 +125,40 @@ func (s *Service) Init(ctx context.Context, in InitInput) (*model.UploadSession,
 		ChunkSize:    int(chunkSize),
 		TotalChunks:  total,
 		Status:       model.UploadUploading,
-		DirRel:       in.Owner.DirRel,
 		SHA256:       sha,
+		// 记住目标文件夹：complete 时据此写入 files.folder_id，
+		// 否则文件虽然落在目录里，目录视图却查不到它。
+		FolderID: in.FolderID,
 	}
-	if sess.DirRel == "" {
+
+	// 目标目录：默认是用户根目录，若指定了 folder_id 则解析出该目录的磁盘路径。
+	// 这里必须校验该目录属于**上传者本人** —— 否则任何人都能往别人目录里写文件。
+	baseRel := in.Owner.DirRel
+	if baseRel == "" {
 		// 兜底：正常情况下 dir_rel 来自 users 表（创建账号时就写好），
 		// 只有早期未写入 dir_rel 的账号才会走到这里，按工号推算。
-		sess.DirRel = storage.UserDirRel(in.Owner.EmployeeNo)
-		if _, err := storage.SafeRel(sess.DirRel); err != nil {
+		baseRel = storage.UserDirRel(in.Owner.EmployeeNo)
+		if _, err := storage.SafeRel(baseRel); err != nil {
 			return nil, fmt.Errorf("该账号的工号不能用作目录名: %w", err)
+		}
+	}
+	sess.DirRel = baseRel
+	if in.FolderID > 0 {
+		fd, err := s.store.GetFolder(ctx, in.FolderID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: 目标文件夹不存在", store.ErrInvalidInput)
+		}
+		if fd.OwnerID != in.Owner.ID {
+			return nil, fmt.Errorf("%w: 只能上传到自己的文件夹", ErrForbidden)
+		}
+		dirRel, err := storage.FolderDirRel(baseRel, fd.Path)
+		if err != nil {
+			return nil, err
+		}
+		sess.DirRel = dirRel
+		// 目录可能已存在（建目录时就创建了），但上传前确保一次更稳妥。
+		if err := s.st.EnsureDir(dirRel); err != nil {
+			return nil, err
 		}
 	}
 	if err := s.store.CreateUploadSession(ctx, sess); err != nil {
@@ -274,7 +303,10 @@ func (s *Service) Complete(ctx context.Context, id string, actor *model.User) (*
 
 	// 先占位取得文件 ID，才能确定磁盘上的最终文件名（users/<owner>/<id><ext>）。
 	placeholder := &model.File{
-		OwnerID:     sess.OwnerID,
+		OwnerID: sess.OwnerID,
+		// 记录归属到会话创建时选定的文件夹，这样目录视图能看到它。
+		// 用会话里存的值而不是重新解析：init 与 complete 之间用户可能改了目录结构。
+		FolderID:    sess.FolderID,
 		OriginalNam: sess.OriginalName,
 		Ext:         sess.Ext,
 		SizeBytes:   sess.SizeBytes,

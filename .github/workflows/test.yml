@@ -102,7 +102,12 @@ jobs:
         env:
           # 集成测试会在该库中建表并清空业务表，使用独立测试库。
           LANDRIVE_TEST_MYSQL_DSN: "root:root@tcp(127.0.0.1:3306)/lanfs_test"
-        run: go test ./internal/store/ ./internal/maintain/ -count=1 -v
+        # 列出需要真实库的包。**新增带 DB 的包必须加进来** ——
+        # 早先这里只写了 store/maintain，导致 shares/handler 的集成测试
+        # 在 CI 里根本不执行（必需检查照样报绿，等于没测）。
+        # 这些包各自用独立库名后缀，互不干扰。
+        run: |
+          go test ./internal/store/ ./internal/maintain/ ./internal/shares/ ./internal/handler/ -count=1 -v
 
       - name: 覆盖率摘要
         if: always()

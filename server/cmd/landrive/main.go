@@ -21,11 +21,13 @@ import (
 	"lan-drive/internal/auth"
 	"lan-drive/internal/config"
 	"lan-drive/internal/files"
+	"lan-drive/internal/folders"
 	"lan-drive/internal/handler"
 	"lan-drive/internal/maintain"
 	"lan-drive/internal/model"
 	"lan-drive/internal/router"
 	"lan-drive/internal/settings"
+	"lan-drive/internal/shares"
 	"lan-drive/internal/storage"
 	"lan-drive/internal/store"
 	"lan-drive/internal/upload"
@@ -92,12 +94,16 @@ func run() error {
 	// 把 files 的展示字段逻辑注入上传服务，避免包循环依赖。
 	uploadsSvc := upload.New(st, disk, set, filesSvc.Decorate)
 	maintSvc := maintain.New(st, disk, set)
+	foldersSvc := folders.New(st, disk)
+	sharesSvc := shares.New(st, disk, set)
 
 	h := handler.New(handler.Deps{
 		Store:    st,
 		Storage:  disk,
 		Settings: set,
 		Files:    filesSvc,
+		Folders:  foldersSvc,
+		Shares:   sharesSvc,
 		Uploads:  uploadsSvc,
 		Maintain: maintSvc,
 		Tokens:   tokens,

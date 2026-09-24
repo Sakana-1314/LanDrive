@@ -35,6 +35,7 @@ import {
   DocumentTextOutline,
   FolderOpenOutline,
   HardwareChipOutline,
+  LinkOutline,
   LogOutOutline,
   MenuOutline,
   MoonOutline,
@@ -160,6 +161,12 @@ const menuOptions = computed<MenuOption[]>(() => {
       label: () => h(RouterLink, { to: '/files/mine' }, { default: () => '我的文件' }),
       key: '/files/mine',
       icon: renderIcon(DocumentTextOutline)
+    },
+    {
+      // 分享管理对所有登录用户开放：需求要求人人能看到所有分享
+      label: () => h(RouterLink, { to: '/shares' }, { default: () => '分享管理' }),
+      key: '/shares',
+      icon: renderIcon(LinkOutline)
     },
     children.length
       ? {

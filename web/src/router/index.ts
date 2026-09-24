@@ -30,6 +30,12 @@ const routes: RouteRecordRaw[] = [
       // 保留重定向，避免旧的收藏/书签 404。
       { path: 'upload', redirect: '/files/mine' },
       {
+        path: 'shares',
+        name: 'shares',
+        component: () => import('@/views/SharesView.vue'),
+        meta: { title: '分享管理' }
+      },
+      {
         path: 'profile',
         name: 'profile',
         component: () => import('@/views/ProfileView.vue'),
@@ -72,6 +78,14 @@ const routes: RouteRecordRaw[] = [
     name: 'preview',
     component: () => import('@/views/PreviewView.vue'),
     meta: { title: '文件预览' }
+  },
+  {
+    // 公开分享页：**免登录**，因此放在主框架之外（无侧栏、无顶栏）。
+    // 路由守卫只认 meta.public，不会拦它。
+    path: '/s/:token',
+    name: 'share',
+    component: () => import('@/views/ShareView.vue'),
+    meta: { public: true, title: '分享的文件' }
   },
   {
     path: '/network-blocked',

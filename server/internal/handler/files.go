@@ -20,17 +20,23 @@ import (
 // 查询参数：scope=all|mine、owner_id、q、ext、page、page_size、sort、order。
 func (h *Handler) ListFiles(c *gin.Context) {
 	page, size := normalizePage(queryInt(c, "page", 1), queryInt(c, "page_size", 20))
+	// folder_id 指定时只看该目录；folder_root=1 表示只看根目录（不传则不按目录过滤）。
+	// 两者互斥：同时传时以 folder_id 为准。
 	opt := files.ListOptions{
 		Actor:    currentUser(c),
 		Scope:    strings.TrimSpace(c.Query("scope")),
 		OwnerID:  queryInt64(c, "owner_id", 0),
-		Status:   model.StatusActive,
-		Keyword:  c.Query("q"),
-		Ext:      c.Query("ext"),
-		Sort:     c.Query("sort"),
-		Order:    c.Query("order"),
-		Page:     page,
-		PageSize: size,
+		FolderID: queryInt64(c, "folder_id", 0),
+		// 接受 "1" 与 "true"：axios 会把布尔 true 序列化成 "true"，
+		// 只认 "1" 会让前端传了却没生效（静默失效最难查）。
+		FolderRootOnly: isTruthyQuery(c.Query("folder_root")),
+		Status:         model.StatusActive,
+		Keyword:        c.Query("q"),
+		Ext:            c.Query("ext"),
+		Sort:           c.Query("sort"),
+		Order:          c.Query("order"),
+		Page:           page,
+		PageSize:       size,
 	}
 	res, err := h.files.List(c.Request.Context(), opt)
 	if err != nil {
@@ -109,7 +115,7 @@ func (h *Handler) PreviewInfo(c *gin.Context) {
 		failErr(c, err, "查询文件失败")
 		return
 	}
-	kind := previewKind(f.Ext)
+	kind := storage.PreviewKind(f.Ext)
 	ok(c, gin.H{
 		"id":          f.ID,
 		"name":        f.OriginalNam,
@@ -122,42 +128,13 @@ func (h *Handler) PreviewInfo(c *gin.Context) {
 	})
 }
 
-// previewKind 判定前端预览方式。
-//
-// 与 storage.IsInlinePreviewable 保持一致：只有服务端允许内联的类型才会
-// 走浏览器原生渲染（pdf/图片/音视频）；其余类型即使前端能解析，也一律
-// 以附件形式下发，避免同源脚本执行风险（例如 SVG、HTML）。
-func previewKind(ext string) string {
-	e := storage.NormalizeExt(ext)
-	switch e {
-	// 纯前端库解析，服务端按附件下发，前端取 blob 后本地渲染。
-	case ".docx":
-		return "docx"
-	case ".xlsx":
-		return "xlsx"
-	case ".pptx":
-		return "pptx"
+// isTruthyQuery 判定查询参数是否为真值（1/true/yes）。
+func isTruthyQuery(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes":
+		return true
 	}
-	if !storage.IsInlinePreviewable(e) {
-		// 旧版 Office 二进制格式给出更明确的提示。
-		if e == ".doc" || e == ".xls" || e == ".ppt" {
-			return "legacy-office"
-		}
-		if storage.IsText(e) {
-			return "text"
-		}
-		return "unsupported"
-	}
-	switch e {
-	case ".pdf":
-		return "pdf"
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff":
-		return "image"
-	case ".mp4", ".webm", ".mov", ".ogg":
-		return "video"
-	default:
-		return "audio"
-	}
+	return false
 }
 
 func previewNote(kind, ext string) string {

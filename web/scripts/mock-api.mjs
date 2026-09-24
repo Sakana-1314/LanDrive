@@ -58,6 +58,46 @@ const json = (res, data, status = 200) => {
   res.end(JSON.stringify(data))
 }
 
+// 文件夹与分享的 mock 数据。刻意包含：空目录（file_count=0，不应被当成已删除）、
+// 已过期、目标已删除三种分享状态，让响应式检查覆盖到这些分支的布局。
+const FOLDERS = [
+  { id: 1, owner_id: 1, parent_id: null, name: '报表', path: '报表', status: 'active',
+    owner_name: '管理员', owner_employee_no: 'admin', file_count: 3, used_bytes: 123456,
+    sub_folder_count: 1, created_at: '2026-09-01T00:00:00Z', updated_at: '2026-09-01T00:00:00Z' },
+  { id: 2, owner_id: 1, parent_id: null, name: '文档', path: '文档', status: 'active',
+    owner_name: '管理员', owner_employee_no: 'admin', file_count: 0, used_bytes: 0,
+    sub_folder_count: 0, created_at: '2026-09-01T00:00:00Z', updated_at: '2026-09-01T00:00:00Z' },
+  { id: 3, owner_id: 1, parent_id: 1, name: '2026', path: '报表/2026', status: 'active',
+    owner_name: '管理员', owner_employee_no: 'admin', file_count: 2, used_bytes: 20000,
+    sub_folder_count: 0, created_at: '2026-09-01T00:00:00Z', updated_at: '2026-09-01T00:00:00Z' }
+]
+
+const SHARES = [
+  { id: 1, token: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', owner_id: 1, target_type: 'file',
+    file_id: 1, folder_id: null, expire_days: null, expires_at: null, view_count: 12,
+    owner_name: '管理员', owner_employee_no: 'admin', target_name: '年度报表.xlsx',
+    target_size_bytes: 204800, target_deleted: false, expired: false,
+    created_at: '2026-09-20T00:00:00Z', updated_at: '2026-09-20T00:00:00Z' },
+  { id: 2, token: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', owner_id: 2, target_type: 'folder',
+    file_id: null, folder_id: 1, expire_days: 7,
+    expires_at: '2099-01-01T00:00:00Z', view_count: 3,
+    owner_name: '李静', owner_employee_no: '1002', target_name: '报表',
+    target_size_bytes: 0, target_deleted: false, expired: false,
+    created_at: '2026-09-21T00:00:00Z', updated_at: '2026-09-21T00:00:00Z' },
+  { id: 3, token: 'cccccccccccccccccccccccccccccccc', owner_id: 1, target_type: 'file',
+    file_id: 2, folder_id: null, expire_days: 1,
+    expires_at: '2026-01-01T00:00:00Z', view_count: 1,
+    owner_name: '管理员', owner_employee_no: 'admin', target_name: '过期的.pdf',
+    target_size_bytes: 1024, target_deleted: false, expired: true,
+    created_at: '2025-12-31T00:00:00Z', updated_at: '2025-12-31T00:00:00Z' },
+  { id: 4, token: 'dddddddddddddddddddddddddddddddd', owner_id: 1, target_type: 'file',
+    file_id: 3, folder_id: null, expire_days: 30,
+    expires_at: '2099-01-01T00:00:00Z', view_count: 8,
+    owner_name: '管理员', owner_employee_no: 'admin', target_name: '已删除的文件.docx',
+    target_size_bytes: 4096, target_deleted: true, expired: false,
+    created_at: '2026-09-22T00:00:00Z', updated_at: '2026-09-22T00:00:00Z' }
+]
+
 http
   .createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost')
@@ -89,6 +129,36 @@ http
       if (target) target.pinned = req.method === 'PUT'
       res.writeHead(204)
       return res.end()
+    }
+    // 文件夹：目录导航与面包屑
+    if (p === '/api/folders') {
+      const folderId = Number(url.searchParams.get('folder_id') || 0)
+      const folders = FOLDERS.filter((f) => (folderId ? f.parent_id === folderId : f.parent_id === null))
+      const current = folderId ? FOLDERS.find((f) => f.id === folderId) || null : null
+      // 面包屑：当前目录的祖先链
+      const breadcrumb = current ? FOLDERS.filter((f) => current.path === f.path || current.path.startsWith(f.path + '/')) : []
+      return json(res, { owner_id: 1, folder_id: folderId, folders, breadcrumb, current })
+    }
+    // 分享列表：所有人都能看到所有人的分享
+    if (p === '/api/shares') {
+      const mine = url.searchParams.get('mine') === '1'
+      const items = mine ? SHARES.filter((s) => s.owner_id === 1) : SHARES
+      return json(res, { items, total: items.length, page: 1, page_size: 20 })
+    }
+    if (p === '/api/shares/options') return json(res, { expire_days: [1, 3, 7, 30] })
+    // 免登录解析：三种失效状态各造一个，便于看文案与布局
+    const shareMatch = p.match(/^\/api\/s\/([0-9a-f]+)$/)
+    if (shareMatch) {
+      const hit = SHARES.find((s) => s.token === shareMatch[1])
+      if (!hit) return json(res, { status: 'notfound', name: '', target_type: '' })
+      if (hit.expired) return json(res, { status: 'expired', name: hit.target_name, target_type: hit.target_type })
+      if (hit.target_deleted) return json(res, { status: 'deleted', name: hit.target_name, target_type: hit.target_type })
+      return json(res, {
+        status: 'ok', name: hit.target_name, size_bytes: hit.target_size_bytes, mime: 'application/pdf',
+        ext: '.pdf', kind: 'pdf', file_count: 0, total_bytes: 0, owner_name: hit.owner_name,
+        target_type: hit.target_type, expire_days: hit.expire_days, expires_at: hit.expires_at,
+        created_at: hit.created_at, view_count: hit.view_count
+      })
     }
     if (p === '/api/uploads/config')
       return json(res, {

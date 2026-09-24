@@ -9,11 +9,16 @@ import axios, { type AxiosInstance, type AxiosProgressEvent } from 'axios'
 import type {
   FileItem,
   FileQuery,
+  Folder,
+  FolderListing,
   OrphanReport,
   OwnerAggregate,
   Paged,
   PreviewInfo,
   Settings,
+  Share,
+  ShareResolved,
+  ShareTargetType,
   Stats,
   UploadConfig,
   UploadSession,
@@ -236,6 +241,88 @@ export async function unpinOwner(id: number): Promise<void> {
   await http.delete(`/files/owners/${id}/pin`)
 }
 
+// --- 文件夹 ---
+
+/** 列出某一层目录（folderId 为 0 表示根层）。 */
+export async function listFolders(q: { owner_id?: number; folder_id?: number }): Promise<FolderListing> {
+  const { data } = await http.get<FolderListing>('/folders', { params: q })
+  return data
+}
+
+export async function createFolder(payload: {
+  name: string
+  parent_id?: number
+  owner_id?: number
+}): Promise<Folder> {
+  const { data } = await http.post<Folder>('/folders', payload)
+  return data
+}
+
+export async function renameFolder(
+  id: number,
+  payload: { name: string; parent_id?: number }
+): Promise<Folder> {
+  const { data } = await http.patch<Folder>(`/folders/${id}`, payload)
+  return data
+}
+
+export async function deleteFolder(id: number): Promise<{ soft_deleted_files: number }> {
+  const { data } = await http.delete<{ soft_deleted_files: number }>(`/folders/${id}`)
+  return data
+}
+
+// --- 分享 ---
+
+/** 可选的有效期（天）；由服务端给出，避免前后端各硬编码一套。 */
+export async function shareExpireOptions(): Promise<{ expire_days: number[] }> {
+  const { data } = await http.get<{ expire_days: number[] }>('/shares/options')
+  return data
+}
+
+/**
+ * 创建分享。
+ * expireDays 传 null/undefined 表示**永久**（默认），其余只允许 1/3/7/30。
+ */
+export async function createShare(payload: {
+  target_type: ShareTargetType
+  target_id: number
+  expire_days?: number | null
+}): Promise<Share> {
+  const { data } = await http.post<Share>('/shares', payload)
+  return data
+}
+
+/** 列出分享。mine=true 只看自己创建的；默认返回所有人的（需求要求人人可见）。 */
+export async function listShares(q: { mine?: boolean; page?: number; page_size?: number }): Promise<Paged<Share>> {
+  const { data } = await http.get<Paged<Share>>('/shares', {
+    params: { mine: q.mine ? 1 : undefined, page: q.page, page_size: q.page_size }
+  })
+  return data
+}
+
+export async function revokeShare(id: number): Promise<void> {
+  await http.delete(`/shares/${id}`)
+}
+
+/**
+ * 免登录解析分享。**不需要令牌** —— 但本函数仍走同一个 axios 实例，
+ * 因为请求头里带不带 token 与服务端是否放行无关（该路由在鉴权组之外）。
+ */
+export async function resolveShare(token: string): Promise<ShareResolved> {
+  const { data } = await http.get<ShareResolved>(`/s/${encodeURIComponent(token)}`)
+  return data
+}
+
+/** 免登录内容地址（用于 img/iframe/video 的 src，不能走 axios）。 */
+export function shareContentUrl(token: string): string {
+  return `${API_BASE_URL}/s/${encodeURIComponent(token)}/content`
+}
+
+/** 免登录下载地址。 */
+export function shareDownloadUrl(token: string): string {
+  return `${API_BASE_URL}/s/${encodeURIComponent(token)}/download`
+}
+
 export async function getFile(id: number): Promise<FileItem> {
   const { data } = await http.get<FileItem>(`/files/${id}`)
   return data
@@ -295,12 +382,15 @@ export async function uploadConfig(): Promise<UploadConfig> {
 export async function initUpload(
   fileName: string,
   fileSize: number,
-  sha256?: string
+  sha256?: string,
+  folderId?: number
 ): Promise<UploadSession> {
   const { data } = await http.post<UploadSession>('/uploads/init', {
     file_name: fileName,
     file_size: fileSize,
-    sha256: sha256 || ''
+    sha256: sha256 || '',
+    // 0/undefined 表示上传到用户根目录
+    folder_id: folderId || 0
   })
   return data
 }

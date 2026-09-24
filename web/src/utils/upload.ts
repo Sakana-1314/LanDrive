@@ -135,10 +135,27 @@ export class UploadManager {
   tasks: UploadTask[] = []
   private employeeNo = 'anon'
   private callbacks: UploadCallbacks
+  /**
+   * 目标文件夹（0 = 用户根目录）。
+   *
+   * 由 setFolderId 在进入目录时更新，而不是构造时固定：
+   * UploadPanel 是长驻组件，用户在目录间切换时不该重建它
+   * （重建会丢掉正在上传的队列）。
+   */
+  private folderId = 0
 
   constructor(employeeNo: string, callbacks: UploadCallbacks = {}) {
     this.employeeNo = employeeNo || 'anon'
     this.callbacks = callbacks
+  }
+
+  /** 设置后续新任务的目标文件夹（不影响已入队的任务）。 */
+  setFolderId(id: number) {
+    this.folderId = id > 0 ? id : 0
+  }
+
+  getFolderId(): number {
+    return this.folderId
   }
 
   private notify(task: UploadTask) {
@@ -191,7 +208,9 @@ export class UploadManager {
   }
 
   private async run(task: UploadTask): Promise<void> {
-    const key = storeKey(this.employeeNo, task.file)
+    // 续传记录按"工号 + 文件 + 目标目录"区分：同一个文件传到不同目录是两次
+    // 不同的上传，共用一个会话会让后一份落到前一个目录里。
+    const key = `${storeKey(this.employeeNo, task.file)}:f${this.folderId}`
     try {
       task.state = 'hashing'
       this.notify(task)
@@ -222,7 +241,7 @@ export class UploadManager {
       }
 
       if (!session) {
-        session = await initUpload(task.file.name, task.file.size, sha)
+        session = await initUpload(task.file.name, task.file.size, sha, this.folderId)
       }
 
       task.uploadId = session.upload_id

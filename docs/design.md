@@ -47,6 +47,12 @@ CORS 拦截）时，必须提示固定文案
 | 在线预览、下载任意人的文件 | ✅ | ✅ |
 | 上传文件（在「我的文件」内拖入） | ✅ | ✅ |
 | 重命名 / 删除 | 仅自己上传的 | 任意文件 |
+| 建文件夹 / 改名 / 删除文件夹 | 仅自己的 | 任意 |
+| 上传到指定文件夹 | 仅自己的文件夹 | 自己的文件夹 |
+| 创建分享链接（文件或文件夹） | 仅自己的 | 任意（含撤销他人的） |
+| 查看分享列表 | ✅（**所有人创建的都能看到**） | ✅ |
+| 撤销分享 | 仅自己创建的 | 任意 |
+| 打开分享链接 | ✅ **无需登录** | ✅ **无需登录** |
 | 查看回收站（已标记删除）、恢复、彻底删除 | ❌ | ✅ |
 | 用户管理 | ❌ | ✅ |
 | 系统管理（体积 / 类型 / 天数 / 分片 / 上传开关 + 存储一致性检查） | ❌ | ✅ |
@@ -64,9 +70,13 @@ CORS 拦截）时，必须提示固定文案
 
 ```
 <DATA_DIR>/
-├── users/<工号>/<file_id><ext>           每个用户目录（目录名即工号）；文件名 = 文件表主键 + 规范化扩展名
-└── tmp/chunks/<upload_id>/<idx>.part     分片上传的临时分片
+├── users/<工号>/<file_id><ext>              用户根目录下的文件；文件名 = 文件表主键 + 规范化扩展名
+├── users/<工号>/<文件夹...>/<file_id><ext>  文件夹内的文件（**真实磁盘层级**，与 folders.path 一一对应）
+└── tmp/chunks/<upload_id>/<idx>.part        分片上传的临时分片
 ```
+- **文件夹是真实磁盘层级**：`folders.path`（相对用户根目录，如 `报表/2026`）就是磁盘上的
+  `users/<工号>/报表/2026`。因此改名/移动文件夹要同时改数据库 `path`+`rel_path` 与磁盘目录，
+  三者必须一致，否则一致性扫描会报缺失。
 
 - 数据库中**只保存相对数据根目录的路径**（`users.dir_rel`、`files.rel_path`、`upload_chunks.rel_path`），一律使用 `/` 分隔。
 - 落库前由 `internal/storage` 校验：非空、`filepath.IsLocal`、不含 `..`、长度受限。
@@ -154,6 +164,52 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
 | `chunk_size_mb` | `4` | 1–64 |
 | `upload_enabled` | `true` | 维护期全局关闭上传 |
 
+### folders
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | BIGINT UNSIGNED PK | |
+| `owner_id` | BIGINT UNSIGNED | 属主，FK → `users(id)` ON DELETE CASCADE |
+| `parent_id` | BIGINT UNSIGNED NULL | 上级目录；NULL = 根层的一级目录 |
+| `name` | VARCHAR(255) | 单层目录名，不含斜杠 |
+| `path` | VARCHAR(512) | 相对**用户根目录**的路径，如 `报表/2026`；`UNIQUE(owner_id, path)` |
+| `status` | VARCHAR(16) | `active` / `deleted` |
+| `created_at` / `updated_at` | DATETIME | UTC |
+
+- 目录**软删除**：删除时置 `status='deleted'` 并把 `path` 追加 `:<id>` 墓碑后缀。原因有两个：
+  分享指向目录记录，删行会让「文件夹已被删除」退化成「链接无效」；
+  且 `UNIQUE(owner_id, path)` 会导致删掉 `报表` 后再也无法新建同名目录。
+  后缀用 `:` 是安全的 —— 目录名清洗会剥掉冒号，用户造不出含冒号的路径。
+- 删目录时其中文件先软删（进回收站，管理员可恢复），语义与删文件一致。
+
+### shares
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | BIGINT UNSIGNED PK | |
+| `token` | CHAR(32) | URL 凭证，`crypto/rand` 生成，`UNIQUE` |
+| `owner_id` | BIGINT UNSIGNED | 创建者，FK → `users(id)` ON DELETE CASCADE |
+| `target_type` | VARCHAR(8) | `file` / `folder` |
+| `file_id` / `folder_id` | BIGINT UNSIGNED NULL | 二选一，FK → `files(id)` / `folders(id)` ON DELETE CASCADE |
+| `expire_days` | INT NULL | 有效期天数；**NULL = 永久** |
+| `expires_at` | DATETIME NULL | 到期时刻；NULL = 永久 |
+| `view_count` | BIGINT UNSIGNED | 成功访问次数，SQL 原子自增 |
+| `created_at` / `updated_at` | DATETIME | UTC |
+
+**分享指向记录，不指向磁盘路径** —— 这一条决定了三项需求语义同时成立：
+
+| 事件 | 结果 | 原因 |
+| --- | --- | --- |
+| 文件改名 / 移动目录 | 链接**仍可用**，显示新名字 | 磁盘名是 `<file_id><ext>`，路径由记录解析 |
+| 文件被删除（进回收站） | 明确提示**「分享的文件已被删除」** | 记录还在，`status=trashed` |
+| 管理员恢复文件 | 同一条链接**自动恢复可用** | 一直指向同一 `file_id` |
+| 记录被彻底清除 / 账号被删 | 分享行随外键 CASCADE 删除 → notfound | 记录已不存在 |
+| 文件夹被删除 | 提示**「分享的文件夹已被删除」** | `folders.status='deleted'` |
+
+- 有效期只允许 `1 / 3 / 7 / 30` 天或永久（NULL），其余一律 400。
+- 过期分享在过期 **30 天**后被每日维护任务清除（`expires_at IS NULL` 的永久分享不受影响）；
+  保留这 30 天是为了让分享者仍能在列表里看到「已过期」，收链接的人也能看到明确原因。
+
 ### user_pins
 
 `owner_user_id`、`target_user_id`、`created_at`，主键 `(owner_user_id, target_user_id)`，索引 `(owner_user_id)`，两个外键均 `ON DELETE CASCADE`。
@@ -188,7 +244,7 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
 | 5 分钟 | 到期标记删除 |
 | 10 分钟 | 物理清理（磁盘 + 数据库） |
 | 1 小时 | 僵尸上传会话（`uploading` 且 24h 未更新）连分片一起清理 |
-| 每天 03:30 | 孤儿文件扫描（`users/**` 中不在 `files.rel_path` 的文件移入 `tmp/orphans`，再保留 7 天后删除） |
+| 每天 03:30 | 孤儿文件扫描（`users/**` 中不在 `files.rel_path` 的文件移入 `tmp/orphans`，再保留 7 天后删除）；清理过期超过 30 天的分享 |
 
 多副本部署时用 `GET_LOCK('lanfs_maintain', 0)` 保证同一时刻只有一个实例执行清理。
 
@@ -201,6 +257,20 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
 - 认证：`Authorization: Bearer <JWT>`，HS256，有效期 12 小时。401 统一跳转登录页。
 - 所有时间字段为 RFC 3339 UTC 字符串（如 `2026-09-01T03:04:05Z`）。
 
+**接口分四档**，新增接口必须明确落在其中一档：
+
+| 档 | 路径 | 鉴权 |
+| --- | --- | --- |
+| 公开 | `/api/health`、`/api/auth/login` | 无 |
+| **免登录（分享）** | `/api/s/:token`、`/api/s/:token/download`、`/api/s/:token/content` | **无**，凭证就是 token |
+| 登录 | `/api/auth/*`、`/api/files/*`、`/api/folders/*`、`/api/shares/*`、`/api/uploads/*` | `RequireAuth` |
+| 管理员 | `/api/admin/*` | `RequireAdmin` |
+
+免登录档的安全边界完全依赖 token，因此有两条硬约束：
+1. 这三个接口**只接受 token**，不接受任何 `id` / 路径参数 —— 否则等于给出一个枚举他人文件的入口。
+2. `/content` 仍然只对 `storage.IsInlinePreviewable` 放行的类型内联，其余强制附件下发。
+   `.svg` / `.html` / `.js` 绝不内联，否则免登录链接会变成「托管并执行任意脚本」的公开入口。
+
 ### 公共类型
 
 ```ts
@@ -212,7 +282,8 @@ type User = {
 }
 
 type FileItem = {
-  id: number; owner_id: number; owner_name: string; owner_employee_no: string;
+  id: number; owner_id: number; folder_id: number; /* 0 = 用户根目录 */
+  owner_name: string; owner_employee_no: string;
   original_name: string; ext: string; size_bytes: number; mime: string; sha256: string;
   rel_path: string; status: 'active' | 'trashed';
   expires_at: string; deleted_at: string | null; purge_at: string | null;
@@ -225,6 +296,47 @@ type UploadSession = {
   chunk_size: number; total_chunks: number; uploaded: number[];
   received_bytes: number; status: 'uploading' | 'done' | 'aborted';
   expires_at: string;
+}
+
+type Folder = {
+  id: number; owner_id: number; parent_id: number | null;
+  name: string; path: string;            /* 相对用户根目录，如 "报表/2026" */
+  status: 'active' | 'deleted';
+  owner_name: string; owner_employee_no: string;
+  file_count: number;    /* 该目录**直接**包含的文件数（不含子目录） */
+  used_bytes: number; sub_folder_count: number;
+  created_at: string; updated_at: string;
+}
+
+type FolderListing = {
+  owner_id: number; folder_id: number;
+  folders: Folder[];
+  breadcrumb: Folder[];       /* 从根到当前目录，供面包屑 */
+  current: Folder | null;
+}
+
+type Share = {
+  id: number; token: string; owner_id: number;
+  target_type: 'file' | 'folder';
+  file_id: number | null; folder_id: number | null;
+  expire_days: number | null;  /* null = 永久 */
+  expires_at: string | null;   /* null = 永久 */
+  view_count: number;
+  owner_name: string; owner_employee_no: string;
+  target_name: string; target_size_bytes: number;
+  target_deleted: boolean;     /* 目标已被删除，前端提示「已被删除」 */
+  expired: boolean;
+  created_at: string; updated_at: string;
+}
+
+/* 免登录解析结果。status 必须区分三种失效原因，否则用户无法判断该找谁。 */
+type ShareResolved = {
+  status: 'ok' | 'expired' | 'deleted' | 'notfound';
+  name: string; size_bytes: number; mime: string; ext: string; kind: string;
+  file_count: number; total_bytes: number; owner_name: string;
+  target_type: 'file' | 'folder' | '';
+  expire_days: number | null; expires_at: string | null;
+  created_at: string | null; view_count: number;
 }
 
 type Settings = {
@@ -255,7 +367,7 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/files` | 查询参数 `scope=all\|mine`、`owner_id`、`q`、`ext`、`page`（默认 1）、`page_size`（默认 20，上限 200）、`sort=created_at\|size_bytes\|expires_at\|original_name`、`order=desc\|asc`；返回 `Paged<FileItem>`。`scope=mine` 等价于 `owner_id=自己` |
+| GET | `/api/files` | 查询参数 `scope=all\|mine`、`owner_id`、`folder_id`（只看该文件夹）、`folder_root=1\|true`（只看根目录）、`q`、`ext`、`page`（默认 1）、`page_size`（默认 20，上限 200）、`sort=created_at\|size_bytes\|expires_at\|original_name`、`order=desc\|asc`；返回 `Paged<FileItem>`。`scope=mine` 等价于 `owner_id=自己`。`folder_id` 与 `folder_root` 需要独立表达：`0` 本身就是"根目录"这个合法取值，没法用零值同时表示"不过滤" |
 | GET | `/api/files/owners` | 返回 `{items: [{user_id, employee_no, name, file_count, used_bytes, pinned}], total}`，仅统计 `active`；`pinned` 与排序按当前登录者计算（置顶优先） |
 | PUT | `/api/files/owners/:id/pin` | 置顶某人目录（幂等）→ 204 |
 | DELETE | `/api/files/owners/:id/pin` | 取消置顶（幂等）→ 204 |
@@ -265,11 +377,37 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | PATCH | `/api/files/:id` | `{original_name}`，仅属主；只允许改主名，扩展名不可变（否则 400）；重名自动追加 ` (n)` |
 | DELETE | `/api/files/:id` | 属主软删除（进回收站），返回 `{ok: true}` |
 
+### 文件夹（登录即可）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/folders` | `owner_id`（0=自己）、`folder_id`（0=根层）；返回 `FolderListing`（子目录 + 面包屑） |
+| POST | `/api/folders` | `{name, parent_id?, owner_id?}`；普通用户只能在自己的目录里建（否则 403）；同名 409 |
+| PATCH | `/api/folders/:id` | `{name, parent_id?}`，改名或移动（`parent_id` 省略则位置不变）；移动到自身或子孙下 400 |
+| DELETE | `/api/folders/:id` | 软删除目录及子孙，其中文件先软删（进回收站）；返回 `{ok: true, soft_deleted_files: n}` |
+
+### 分享（登录即可，**打开链接不需要登录**）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/shares` | `mine=1` 只看自己创建的；默认**返回所有人的分享**（含创建者姓名/工号）。返回 `Paged<Share>` |
+| GET | `/api/shares/options` | `{expire_days: [1,3,7,30]}`；由服务端给出，避免前后端各硬编码一套 |
+| POST | `/api/shares` | `{target_type: 'file'\|'folder', target_id, expire_days?}`；`expire_days` 省略/`null` = **永久**（默认），其余只允许 1/3/7/30（否则 400）；普通用户只能分享自己的（403），管理员可分享任意 |
+| DELETE | `/api/shares/:id` | 撤销；创建者本人或管理员（否则 403）；撤销后链接立即失效 |
+
+### 分享的免登录访问（**无鉴权**）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/s/:token` | 解析分享。**统一返回 200 + `status` 字段**（`ok` / `expired` / `deleted` / `notfound`）—— 用 404 表示一切会让前端无法区分"过期""文件被删""链接错了" |
+| GET | `/api/s/:token/download` | 附件下载；失效时 `410`（过期/已删除，文案分别是「该分享链接已过期」「分享的文件已被删除」）或 `404`（无效）。文件夹分享返回**流式 zip**（上限 2000 个文件 / 2 GiB，超限 413） |
+| GET | `/api/s/:token/content` | 内联字节流，仍受 `IsInlinePreviewable` 限制；其余强制附件下发 |
+
 ### 分片上传
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/uploads/init` | `{file_name, file_size, sha256?}` → `UploadSession`。同属主 + 同名 + 同大小 + 同 sha 的未完成会话直接复用（断点续传）；超体积 / 扩展名不允许 → 413 / 400，且不产生任何磁盘写入；`upload_enabled=false` → 403 |
+| POST | `/api/uploads/init` | `{file_name, file_size, sha256?, folder_id?}` → `UploadSession`。`folder_id` 为 0/省略即用户根目录；服务端据 id 解析磁盘路径（**只收 id 不收路径字符串**，客户端传不了 `../`），并校验该目录属于上传者本人（否则 403）。同属主 + 同名 + 同大小 + 同 sha 的未完成会话直接复用（断点续传）；超体积 / 扩展名不允许 → 413 / 400，且不产生任何磁盘写入；`upload_enabled=false` → 403 |
 | PUT | `/api/uploads/:id/chunks/:idx` | 裸二进制写入第 `idx` 片；幂等覆盖；`idx` 越界 400；累计字节超过声明大小 → 413 |
 | GET | `/api/uploads/:id` | 会话状态与已上传分片索引（刷新后续传依据）；会话不存在 / 已清理 → 410 |
 | POST | `/api/uploads/:id/complete` | 校验分片齐全且累计字节一致 → 顺序合并 → sha256 → 落最终文件 → 入库 → 返回 `FileItem`；重复调用返回已生成文件（幂等） |
@@ -329,7 +467,9 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | --- | --- | --- |
 | `/login` | 登录 | 工号 + 密码 |
 | `/files` | 全部文件 | 侧栏「全部文件」展开即为按人的子 tab（`?owner=<id>`，可置顶）；人人可下载 / 预览 |
-| `/files/mine` | 我的文件 | 仅自己的文件，可改名 / 删除；顶部内嵌上传面板（拖拽即传） |
+| `/files/mine` | 我的文件 | 仅自己的文件，可改名 / 删除；**文件夹导航**（面包屑、新建/改名/删除、进入子目录）；顶部内嵌上传面板（拖拽即传，**传到当前所在目录**） |
+| `/shares` | 分享管理 | **所有人创建的分享都能看到**（带创建者、有效期、查看次数）；可切「只看我的」、复制链接、撤销（自己的或管理员的） |
+| `/s/:token` | 分享页（**免登录**） | 不在主框架内；显示文件名/大小/分享者/有效期，图片·PDF·音视频内联，其余下载；目录分享给打包 zip。三种失效状态各有文案：已过期 / 已被删除 / 链接无效 |
 | `/preview/:id` | 预览 | 全屏预览 |
 | `/admin/users` | 用户管理 | 仅管理员 |
 | `/admin/settings` | 系统管理 | 上传策略 + 存储一致性检查，仅管理员 |
