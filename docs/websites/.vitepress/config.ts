@@ -46,7 +46,9 @@ export default withMermaid(
           items: [
             { text: '登录', link: '/usage/login' },
             { text: '浏览与下载', link: '/usage/files' },
+            { text: '文件夹', link: '/usage/folders' },
             { text: '上传文件', link: '/usage/upload' },
+            { text: '分享文件', link: '/usage/share' },
             { text: '在线预览', link: '/usage/preview' },
             { text: '修改密码', link: '/usage/profile' },
           ],
