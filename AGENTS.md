@@ -143,3 +143,41 @@
 - **镜像要求**：`server` 镜像只含二进制（多阶段构建、非 root、内置 HEALTHCHECK）；`web` 镜像为 nginx + 静态产物 + `docker-entrypoint.d` 运行时注入脚本。两个镜像都不得硬编码内网地址或密钥。
 - **安全红线**：工作流文件公开可见，**严禁硬编码 IP、密钥、内网域名**；
   **仓库源码与文档同样公开，示例地址一律用 `example.com` / `localhost` 占位**（真实域名只存在于部署机的 `.env` 与仓库变量/密钥中），一律 `${{ secrets.* }}` / `${{ vars.* }}` 引用；`GITHUB_TOKEN` 只申请必需的权限（`contents: read`、推送镜像时加 `packages: write`）。
+
+## 9. 发布流程（合并到 main 之后必做）
+
+**合并 PR 只是把镜像推上 ghcr，线上还是旧版本 —— 内网部署机必须再手动更新一次。**
+这一步最容易漏（漏了就是"CI 全绿但用户看到的还是旧界面"），所以固定成流程：
+
+1. **合并到 main** → `build-images.yml` 按变更目录重建镜像（只改 `web/**` 就只重建 web），
+   `website.yml` 在 `docs/**` 变更时自动发布文档站（这一步是自动的，不用管）。
+2. **更新内网部署机**（`ssh` 别名与私钥只存在于开发机 `~/.ssh/config`，仓库里不写地址）：
+   ```bash
+   ssh landrive                       # 见 ~/.ssh/config，非仓库内容
+   cd /opt/1panel/docker/compose/lan-drive
+   BK=/root/landrive-update-$(date -u +%Y%m%d-%H%M%S); mkdir -p "$BK"
+   cp docker-compose.yml "$BK/" && docker inspect LanDrive-Web LanDrive-API \
+     --format '{{.Name}} {{.Image}}' > "$BK/images-before.txt"   # 回滚点
+   docker compose pull <service>       # 只拉改动过的：web / api
+   docker compose up -d --no-deps <service>
+   ```
+   **只更新改动过的服务**：`--no-deps` + 指定服务名，避免无谓重建另一个容器
+   （server 没改就别动 `api`，它会执行迁移）。
+3. **核对镜像 digest**：`docker images --digests | grep lan-drive` 的 digest 必须等于
+   `build-images.yml` 日志里 push 的那个 `sha256:...`。**只看到 CI 绿灯不算验证。**
+4. **验收（对着生产，不是对着本地）**：容器 healthy、`/api/health` 通、
+   同源 `/api` 反代通、新产物指纹确实进了容器
+   （`docker exec LanDrive-Web grep -l <本次新增文案> /usr/share/nginx/html/assets/*.js`）、
+   数据未动（用户数 / 回收站数 / `data/users` 文件数）。
+5. 把结果追加到 `todo.md` 的 Log（这是台账）。
+
+**踩过的坑**：
+- 内网穿透隧道不稳、且会截断大文件。**远程命令一律 `setsid nohup ... &` 交给远端后台执行**，
+  否则隧道一断命令就半途中止（曾把 `docker compose up` 打断在中间）。
+- 需要本地浏览器验收生产页时，用自愈隧道
+  （`while true; do ssh ... -N -L <本地端口>:127.0.0.1:<网页端端口> landrive; sleep 2; done`），
+  并注意 `page.addInitScript` 必须在 `goto` 之前注册。
+- 真实域名解析到**内网地址**，在开发机上不可直达，只能经隧道访问。
+- 生产的 compose / `.env` 里含 JWT 密钥与管理员密码 —— 只存在于部署机，
+  **绝不可复制进仓库、日志或提交信息**；`todo.md` 又是公开文件，写台账时不要重复贴地址与凭据。
+

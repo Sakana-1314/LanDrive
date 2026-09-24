@@ -16,6 +16,56 @@
 
 ## Log
 
+- **2026-09-24 P20 整页拖放上传 + 页面头部/用户下拉菜单统一（PR #15）+ 内网部署**
+
+  需求两项：上传不要单独的拖入区域（整页任意位置可拖）；UI 不统一
+  （分段切换高度与左右位置不一致）、用户下拉菜单显示异常。
+
+  **一、整页拖放上传**：删掉虚线拖拽框，改为 document 捕获阶段的页面级拖放
+  （`PageDropZone`）—— 列表、文件夹卡片、面包屑、空白处任意位置松手即传，
+  拖入时浮出整页提示。入口两处共用一份队列：整页拖放 + 工具条「上传文件」按钮
+  （移动端没有拖拽操作，必须留按钮）。`UploadPanel` 拆成 `useUploadQueue`（逻辑）
+  + `UploadQueue`（纯队列视图）。目标目录在**入队那一刻**同步，拖入后切目录不会传错。
+
+  顺带修掉一个真实缺陷：`/files` 与 `/files/mine` 复用同一组件实例（原代码正是为此
+  watch `route.fullPath`），只在 `onMounted` 拉上传策略的话，从「全部文件」点进
+  「我的文件」时策略永远拉不到 ——「上传已暂停」静默失效、按钮不禁用。
+  改为路由变化也调用幂等的 `prepare()`。
+
+  **二、UI 统一**（先量再改，不凭观感）：改前实测分享管理分段切换靠左、
+  文件与回收站**靠右**；头部混用 28px 与 34px；用户管理卡片自写 `border-radius:8px`。
+  现固定为**筛选靠左、按钮靠右**：`.section-head` = 左区 `.section-head__main`
+  + 右区 `.section-head__actions`；头部控件统一 Naive medium（34px）；
+  卡片圆角统一 `--radius-card`。
+
+  **三、用户下拉菜单两个真实缺陷**：
+  1. 深色档弹层底色是 Naive 内置灰 `rgb(72,72,78)`。根因：Dropdown/Select 弹层用
+     `common.popoverColor` 而**不是** `cardColor`，`theme.ts` 从未覆盖它。已补两档。
+  2. 用量块与选项文字错开：实测「姓名」在 `x=0`、而「外观」在 `x=36`
+     （渲染型选项不参与 Naive 前缀缩进）。已按 `--n-option-icon-prefix-width` 对齐。
+
+  **防复发**（均接入 `npm test`，且做了变异验证 —— 去掉修复会真的失败）：
+  `theme.spec.ts`（明暗两套覆盖结构必须一致、`popoverColor` 必须显式给出）、
+  `check-ui-consistency.mjs`（头部左右结构、控件尺寸、卡片圆角）。
+
+  **发布与部署**：
+  - PR #15 合并 `c7c4c67`；`build-images.yml` 只重建 web（按变更目录跳过 server）；
+    文档站自动发布到 gh-pages。
+  - web 镜像 digest `sha256:97823fa3…6305`（固定 tag + 时间戳 tag `web-20260924-103734`），
+    与构建日志一致。
+  - 内网部署机按「只更新改动过的服务」更新 web：`docker compose up -d --no-deps web`，
+    **API 未重建**（`api` 容器 0 重启、StartedAt 不变，确认没白跑迁移）。
+  - 验收对着生产做（经自愈隧道，真实域名解析到内网、开发机不可直达）：
+    容器 healthy、`/api/health` 通、同源 `/api` 反代通、容器内产物含本次新增文案
+    且旧 `n-upload-dragger` 已消失；真实浏览器在生产页确认整页拖放提示、
+    头部控件统一 34px、下拉菜单明暗两档底色为 `#ffffff` / `#1c222b` 且左对齐 36=36、
+    各管理页无 JS 报错。
+  - **数据未动**：users=2、回收站=1、active=0、`data/users` 文件数=1，与更新前一致。
+    回滚点 `/root/landrive-update-20260924-111954`（compose + 更新前镜像 digest）。
+
+  **环境提示**：隧道不稳，曾把 `docker compose up` 打断在中间 —— 远程写操作一律
+  `setsid nohup … &` 交远端后台执行；本地浏览器验收用自愈隧道（断了自动重连）。
+
 - **2026-09-23 P19 工号目录 / 菜单整改 / 删除账号自动清文件（PR #12）+ 部署**
 
   **需求实现**
