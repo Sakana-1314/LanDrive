@@ -304,6 +304,7 @@ fi
 # 创建一个第二个用户，验证其不能修改他人文件。
 TEST2_NO="${TEST_NO}b"
 C2="$(api POST /api/admin/users "$ADMIN_TOKEN" "{\"employee_no\":\"$TEST2_NO\",\"name\":\"冒烟测试用户2\",\"role\":\"user\",\"password\":\"$TEST_PW\"}")"
+TEST2_ID="$(jget "$C2" "j.get('id','')")"
 L2="$(api POST /api/auth/login '' "{\"employee_no\":\"$TEST2_NO\",\"password\":\"$TEST_PW\"}")"
 T2="$(jget "$L2" "j.get('token','')")"
 if [ -n "$T2" ]; then
@@ -531,6 +532,14 @@ info "12. 清理测试数据"
 # 删除账号：服务端会先软删其文件再删账号并清目录，无需 purge 参数。
 CODE="$(httpcode DELETE "/api/admin/users/$TEST_ID" "$ADMIN_TOKEN" '')"
 [ "$CODE" = "200" ] && ok "测试用户及其文件已删除（自动清理）" || bad "删除测试用户失败（$CODE）"
+
+# 第二个测试用户也要删掉。
+# 之前漏了这一步：脚本每跑一次就在系统里留下一个 smoke<ts>b 账号，
+# 而最后汇总仍报"全部通过" —— 冒烟脚本自己污染生产数据却看不出来。
+if [ -n "${TEST2_ID:-}" ]; then
+  CODE="$(httpcode DELETE "/api/admin/users/$TEST2_ID" "$ADMIN_TOKEN" '')"
+  [ "$CODE" = "200" ] && ok "第二个测试用户已删除" || bad "删除第二个测试用户失败（$CODE）"
+fi
 
 # 删除自己应被拒绝。
 ME="$(api GET /api/auth/me "$ADMIN_TOKEN" '')"
