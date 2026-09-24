@@ -192,11 +192,16 @@ onMounted(load)
   <div class="shares-page">
     <n-card class="card-surface" :bordered="false">
       <div class="section-head">
-        <n-radio-group v-model:value="scope" size="small">
-          <n-radio-button value="all">全部人的分享</n-radio-button>
-          <n-radio-button value="mine">只看我的</n-radio-button>
-        </n-radio-group>
-        <n-button size="small" quaternary :loading="loading" @click="load">刷新</n-button>
+        <!-- 左：筛选（分段切换）；右：按钮 -->
+        <div class="section-head__main">
+          <n-radio-group v-model:value="scope">
+            <n-radio-button value="all">全部人的分享</n-radio-button>
+            <n-radio-button value="mine">只看我的</n-radio-button>
+          </n-radio-group>
+        </div>
+        <div class="section-head__actions">
+          <n-button quaternary :loading="loading" @click="load">刷新</n-button>
+        </div>
       </div>
 
       <n-empty

@@ -34,6 +34,8 @@
   --color-surface-translucent: rgb(255 255 255 / 92%);
   --color-border: #e2e7ef;
   --color-border-subtle: #edf0f5;
+  /* 全屏遮罩（整页拖放提示）：明暗两套各给一个，避免组件里写死色值 */
+  --color-overlay: rgb(244 246 250 / 78%);
 
   --color-table-header: #f7f9fc;
   --color-table-row-hover: #f4f7ff;
@@ -94,6 +96,7 @@
   --color-surface-translucent: rgb(25 30 38 / 92%);
   --color-border: #333b47;
   --color-border-subtle: #2a313b;
+  --color-overlay: rgb(19 23 29 / 82%);
 
   --color-table-header: #1e242d;
   --color-table-row-hover: #212936;
@@ -135,9 +138,17 @@ body {
 
 /* ============ 复用类：减少各页面重复的内联 style ============ */
 
-/** 页面区块标题：图标 + 标题 + 可选右侧操作。替代原先「标题 + 一行小字说明」。 */
+/**
+ * 卡片/页面头部：**左侧放标题与筛选（分段切换、下拉、搜索框），右侧只放按钮**。
+ *
+ * 为什么定成这个方向：此前同一类分段切换在「分享管理」里靠左、在
+ * 「文件与回收站」里靠右，翻页时会找不到控件；右侧既放筛选又放按钮时，
+ * 主操作（新建/上传）的位置也跟着页面漂移。固定为「左筛选、右按钮」后，
+ * 所有页面的主操作都落在同一个角落。
+ */
 .section-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm);
@@ -146,6 +157,32 @@ body {
   margin-bottom: var(--space-md);
 }
 
+/** 头部左区：标题、计数、分段切换、筛选器都放这里。 */
+.section-head__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/** 头部右区：只放按钮（主操作靠右，与左区的筛选明确分开）。 */
+.section-head__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  /* 左区内容较多时把按钮顶到最右，避免被挤到中间 */
+  margin-left: auto;
+}
+
+/**
+ * 头部里的控件统一用 Naive UI 的默认尺寸（medium = 34px）。
+ *
+ * 不要给头部控件传 size="small"（28px）：同一行里混入 28px 的分段切换或
+ * 按钮时高度会参差不齐。small 只用于表格行内这类紧凑场景。
+ * 这条靠约定 + scripts/check-ui-consistency.mjs 静态检查维持，不是靠 CSS。
+ */
 .section-head__title {
   display: flex;
   align-items: center;
@@ -175,23 +212,35 @@ body {
 /**
  * 使用量信息块。必须放在全局样式里：n-dropdown 的菜单内容会 teleport 到
  * body 之外，组件内的 <style scoped> 覆盖不到它。
+ *
+ * 左侧内边距与选项文字对齐：选项的图标前缀宽由 Naive 的
+ * --n-option-icon-prefix-width 决定（36px），渲染型选项不参与这层缩进，
+ * 因此这里要自己补上，否则「姓名 / 用量」会贴到菜单最左边，
+ * 和下面的「外观 / 个人设置」错开一截。
  */
 .menu-usage {
   display: grid;
   gap: 2px;
-  min-width: 150px;
-  padding: 2px 0;
+  min-width: 168px;
+  max-width: 260px;
+  padding: 6px 16px 6px var(--n-option-icon-prefix-width, 36px);
 }
 
 .menu-usage__name {
+  overflow: hidden;
   color: var(--color-text-strong);
   font-size: 14px;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .menu-usage__sub {
+  overflow: hidden;
   color: var(--color-text-muted);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /**

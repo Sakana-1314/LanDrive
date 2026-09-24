@@ -73,6 +73,15 @@
   - **明暗外观**在 `src/utils/themeState.ts`（`reactive` 单例，三档 auto/light/dark），
     Naive UI 覆盖值在 `src/utils/theme.ts` 的 `createThemeOverrides(palette)`；
     两套是一份结构两个调色板，**不要只改一套**（另一套会掉回内置值）。
+    **浮层类组件必须覆盖 `common.popoverColor`**：Dropdown / Select / Popover 的弹层底色
+    用它而不是 `cardColor`，漏掉时深色档会显示 Naive 内置的 `rgb(72,72,78)` 灰
+    （已发生，用户下拉菜单那块不协调的底色）。由 `src/utils/theme.spec.ts` 守卫。
+  - **页面头部统一样式**：`.section-head` = 左区 `.section-head__main`（标题、计数、
+    分段切换、筛选器）+ 右区 `.section-head__actions`（只放按钮）。
+    **筛选一律靠左、按钮一律靠右**（曾出现同类分段切换一处靠左一处靠右，翻页找不到控件）。
+    头部内控件用 Naive 默认尺寸 medium（34px），**不要传 `size="small"`**（28px 与 34px
+    并排会参差不齐）；`small` 只用于表格行内。卡片圆角统一 `--radius-card`，不要内联
+    `border-radius`。由 `scripts/check-ui-consistency.mjs` 守卫（已接入 `npm test`）。
   - **响应式**：`useIsMobile()`（≤768px）判断形态；视图切换优先用 CSS 媒体查询而非 JS 断点（首帧即正确）。
     桌面表格 / 移动卡片两套视图必须共用同一份操作逻辑（见 `composables/useFileActions.ts`），不要各写一份。
   - **布局陷阱**（都踩过）：全局 `box-sizing: border-box` 不可去掉；
