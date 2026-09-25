@@ -16,6 +16,54 @@
 
 ## Log
 
+- **2026-09-25 P30 合并 P28/P29 并部署到内网部署机（生产验收通过）**
+
+  要求：把 P28（预览弹层 iframe + 深色）与 P29（侧栏 tab 与置顶下拉）合并后部署。
+
+  **合并**：按仓库惯例拆成两个 PR（一提交一 PR）。
+  - PR #25 P28 预览弹层：必需检查 `测试通过` 全绿，且从 CI 日志确认新增的
+    「预览弹层检查」步骤**真的执行**并打印通过（不是被跳过）；
+  - PR #26 P29 侧栏：「⋯」下拉与 tab 文案。P28 合并后 PR #26 与 `main` 冲突
+    （两边都改了 `package.json` / `Makefile` / `test.yml` / `todo.md`）——
+    冲突都是「各自新增一段」的加性冲突，rebase 到新 `main` 后按「两边都保留」解决，
+    并在本地把 `typecheck` / `test` / 两个浏览器检查 / `build` 全跑一遍才 force-push。
+    **注意 `MainLayout.vue` 是自动合并的**，所以专门确认了 P28 的 `PreviewModal`
+    与 P29 的 `OwnerMenu` 两处改动都还在。
+
+  **镜像**：`web/**` 变更触发 `build-images.yml`，`构建 server 镜像 = skipped`
+  （只重建 web，符合预期）。web digest `sha256:675c951a…`。
+
+  **部署**（只动 web，`--no-deps`，避免 api 跑迁移）：
+  - 回滚点 `/root/landrive-update-20260925-104504`（compose 副本 + 更新前镜像清单）；
+  - `docker compose pull web` → `up -d --no-deps web`；
+  - **核对 digest**：部署机上 `sha256:675c951a…` 与 CI 日志里 push 的**完全一致**
+    （只看 CI 绿灯不算验证）；
+  - 更新与未变动的对照：web `df6d1461…` → `675c951a…`，api 保持 `fff91c89…` 未动。
+
+  **生产验收**（经自愈隧道对着真实站点，不是对着本地）：
+  - 容器 healthy、`/api/health` 200、同源 `/api` 反代通（`LanDrive-Web` 健康、
+    `LanDrive-API` 仍显示 Up 9 hours、digest 未变）；
+  - 新产物确实进了容器：`MainLayout` 指纹变了（`-DLMqpgOE` → `-BCvKe_89`），
+    且该产物里同时含 P28 的 `preview-shell` 与 P29 的「更多/置顶」；
+  - 真实浏览器（真实 admin token）验收：侧栏子 tab **只有姓名、无计数**，
+    右侧触发键 title 是「更多」，点开下拉只有「置顶」一项；
+    点文件「预览」**新开标签数 = 0**，弹层出现、`iframe src=/preview/27?embed=1`、
+    `legacyBar(旧顶部栏) = false`、有悬浮关闭键；深色档下 iframe 内
+    `data-theme=dark`、预览面底色 `rgb(28,34,43)`；
+  - 真实文件逐个渲染：`c.txt` 正文出来了、xlsx 表格渲染正常（`sheet` + `n-tabs`）、
+    PDF 走 blob + 内层 iframe（526660 字节）。
+  - **数据未动**：`/data/users` 目录数仍为 3，用户文件未被触碰（只读验收，
+    除登录与预览外未产生任何写操作）。
+
+  **踩到的坑（值得记）**：
+  1. **隧道会把慢当坏**：PDF（526KB）经隧道要 **10 秒**才取完，初次只等 12 秒，
+     页面还在「正在加载文件内容…」，看着像预览坏了。放长等待后确认
+     blob 字节数完全正确、内层 iframe 1325×828 正常。教训与 P27 一致：
+     **穿透场景下的异常先排除「链路慢/断了」，再怀疑代码**。隧道这次也断了 3 次
+     （`ERR_CONNECTION_REFUSED` / `ERR_EMPTY_RESPONSE`），靠自愈重连循环恢复。
+  2. **headless Chromium 不绘制内置 PDF 查看器**，截图里 PDF 区域是全白的；
+     要判定 PDF 是否真的加载，得量 blob 大小与内层 iframe 尺寸，不能看截图。
+
 - **2026-09-25 P28 预览改为列表页内弹层 + iframe 内嵌，并适配深色**
 
   要求：预览改成 **iframe 内部预览**、**去掉顶部的名称与下载按钮**，并**适配深色模式**。
