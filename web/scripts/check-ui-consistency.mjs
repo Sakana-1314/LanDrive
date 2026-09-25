@@ -153,6 +153,13 @@ if (!/padding:\s*var\(--preview-gutter\)\s+var\(--preview-pad\)/.test(viewText))
   problems.push(`${viewFile}: .preview-stage 未使用统一的 --preview-gutter / --preview-pad 内边距`)
 }
 
+// 6d) 预览状态组件不许内联写死 padding：空/错误态的 40px 0、60px 0 就是漂移来源。
+for (const tag of viewText.match(/<n-(empty|result|spin)[^>]*>/g) || []) {
+  if (/style="[^"]*padding/.test(tag)) {
+    problems.push(`${viewFile}: 预览状态组件内联写死 padding（${tag.slice(0, 60)}…）——请统一用 .preview-state / --preview-pad`)
+  }
+}
+
 if (problems.length) {
   console.error(`❌ 发现 ${problems.length} 处头部/卡片/空状态/预览一致性不一致：`)
   for (const p of problems) console.error('   - ' + p)

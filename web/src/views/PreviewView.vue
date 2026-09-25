@@ -158,7 +158,7 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
       v-else-if="info && (info.kind === 'unsupported' || info.kind === 'legacy-office')"
       class="preview-state"
     >
-      <n-empty :description="info.note || '该格式不支持在线预览'" style="padding: 40px 0">
+      <n-empty :description="info.note || '该格式不支持在线预览'">
         <template #extra>
           <n-button type="primary" @click="onDownload">下载文件</n-button>
         </template>
@@ -202,7 +202,7 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
       </div>
     </template>
 
-    <n-empty v-else class="preview-state" description="没有可预览的内容" style="padding: 60px 0" />
+    <n-empty v-else class="preview-state" description="没有可预览的内容" />
   </div>
 </template>
 
@@ -237,12 +237,12 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
   box-shadow: var(--shadow-card);
 }
 
-/* 加载/错误/空态统一居中：这些是整页状态，不该缩在顶上。 */
+/* 加载/错误/空态统一居中：这些是整页状态，不该缩在顶上、也不该各写一套内边距。 */
 .preview-state {
   align-self: center;
   justify-self: center;
   width: 100%;
-  padding: 40px 16px;
+  padding: var(--preview-gutter) var(--preview-pad);
   text-align: center;
 }
 
