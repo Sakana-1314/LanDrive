@@ -16,6 +16,52 @@
 
 ## Log
 
+- **2026-09-25 P23 仓库隐私/中间文件复核清理 + 固化 `/.private/` 约定**
+
+  要求：复核整个仓库，删掉与项目无关的文件（含中间文件、隐私文件），
+  隐私文件应放在被 gitignore 的仓库目录。
+
+  **复核结论（先查再动）**：仓库根目录**实际只有 12 个条目**（`.dockerignore`、
+  `.env.example`、`.gitignore`、`AGENTS.md`、`Makefile`、`README.md`、
+  `docker-compose.yml`、`todo.md` + `.github/`、`docs/`、`server/`、`web/`），
+  与 GitHub 上一致，**没有**混进无关文件或构建产物 —— 上一轮的拖拽框、重复空状态
+  等也无残留。所以这次的重点落在「隐私」与「本机私有留档」上。
+
+  **发现并修复的真实隐私问题**：公开仓库的台账里写着**真实工号**
+  （`todo.md` 两处、`storage_test.go` 测试夹具一处）。已全部改为 `<工号>`/
+  `<新工号>`/无关数字占位。**没开 PR**（PR 的 diff 会把被删掉的明文展示在公开页面
+  上，PR #18 的教训），直接 fast-forward 推到 `main`。
+
+  **本机私有文件归入 `/.private/`**（已 gitignore，`git check-ignore` 验证）：
+  之前散落在 `/root` 的 git bundle 全量备份、worktree 备份、分支保护备份、
+  指向文件，全部移入 `.private/backups/` 并修正了指针文件；空目录 `bin/` 删除
+  （`make` 会重建）；本项目的 `/tmp` scratch（demo 数据、旧克隆、截图等约 430MB）
+  一并清理。**均未进 git**。
+
+  **补 .gitignore 缺口**：根目录 `.env.*` 变体（staging/production 等）此前**未被忽略**，
+  可能把真实地址带进公开仓库；已加 `/.env.*`（保留 `!/.env.example`）与 `web/.env.staging`。
+
+  **固化规则**：AGENTS.md 安全红线补上「私有文件一律放 `/.private/`」
+  「进仓库即视为公开」「删除敏感信息禁止开 PR，应强推覆盖并重写历史」。
+
+  **清理本地 git 残留**：7 个已合并的陈旧本地分支（`chore/rename-to-landrive`、
+  `feat/api-proxy` 等）仍可达**已从分支清除的真实内网域名**，已全部删除并
+  `reflog expire` + `gc --prune=now`；本地 12 个含泄漏的 blob 命中归 **0**，
+  `git fsck` 无异常。顺带 prune 了两个已在远端删除的 remote-tracking ref。
+
+  **验证**：`typecheck` / `npm test` / `build` / `test:responsive`（5 视口）/
+  `test:entrypoint`（含真实 nginx 与内网域名守卫）/ `vitepress build` 全绿；
+  CI `测试通过`（后端 Go + 汇总）与 `构建并推送镜像` 成功。
+  改动只碰 `.gitignore`、`AGENTS.md`、`todo.md`、一个 `_test.go` 夹具，
+  **未触碰**工作区里另一会话的 logo/favicon 改动（原样保留）。
+
+  **部署**：`server/**` 有变更（仅测试文件，`go build` 不含测试）触发 server 镜像重建，
+  按流程只更新 `api`：digest `c1005616…` → `fff91c89…`（与构建日志一致），
+  `--no-deps` 未动 web。回滚点 `/root/landrive-update-20260925-014821`。
+  验收：两容器 healthy、`/api/health` 通（`schema_ver:3`）、登录与用户数 2 正常。
+  说明：回收站计数从台账记的 1 变为 2，多出的文件在 **01:07Z** 被删除，
+  **早于本次 01:48Z 的部署**，非本次操作所致。
+
 - **2026-09-25 P22 修复「我的文件」出现两遍空状态提示（PR #19）+ 部署**
 
   现象：空目录下页面同时渲染「这里还没有文件」与「暂无文件」两条空提示。
