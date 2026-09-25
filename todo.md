@@ -16,6 +16,57 @@
 
 ## Log
 
+- **2026-09-25 P25 修复「上传文件夹只传了个同名空文件」（PR #22）+ 部署**
+
+  现象：从系统拖入一个文件夹，只上传了一个与文件夹同名的 0 字节文件，里面的文件全丢。
+
+  **根因（先复现再改）**：从系统拖入文件夹时，`dataTransfer.files` 里**只有那个文件夹
+  本身**（一个 0 字节的 `File`）。旧代码直接读 `files` 就入队，所以"文件夹"被当成
+  空文件上传。真实浏览器复现抓到现场：
+  `POST /uploads/init {"file_name":"报表","file_size":0,"folder_id":0}`。
+  目录内容只能经 `DataTransferItem.webkitGetAsEntry()` 递归读取 —— 该接口浏览器支持
+  （实测 `hasGetAsEntry: true`），但代码从未调用；`<input webkitdirectory>` 那条
+  路径也没读 `webkitRelativePath`。
+
+  **改法**：
+  - 新增 `web/src/utils/uploadEntries.ts`：把拖放/选择到的条目展平成「文件 + 相对目录」。
+    目录用 `webkitGetAsEntry` 递归（`readEntries` 每次最多 100 条，必须循环读到空），
+    选目录读 `webkitRelativePath`；非法目录名跳过而不是让整棵树失败。
+  - `PageDropZone` 的 drop 改走该函数（异步递归）。
+  - `useUploadQueue`：按层级分组，逐级**解析/创建**目录（同名复用，避开 409），
+    再把文件按各自目标目录入队。
+  - `upload.ts`：目标目录改成**每个任务自带**（`folderId`/`dirs`）—— 同一批拖入的
+    文件分属不同层级，用 manager 上的共享字段会被后一个覆盖。
+  - 新增「上传文件夹」按钮 + `webkitdirectory` 输入（移动端没有拖拽也能传整个目录）。
+  - `UploadQueue` 显示「相对目录/文件名」，同名文件不再分不清。
+
+  **顺带修掉一个回归测试的假通过**（这次工具条裁剪就是被它漏掉的）：
+  `check-responsive` 判断"元素是否越界"时一见 `overflowX:scroll` 的祖先就跳过，
+  于是被 `overflow:hidden` 祖先**裁掉**的元素一路报绿
+  （390px 下工具条第三个按钮只剩一半，而 `document.scrollWidth == innerWidth`）。
+  改为区分「可滚动祖先」（跳过）与「裁剪祖先」（超出右边界即报错）。
+  新工具条也因此允许换行（三个按钮共 368px，窄屏折行后完整可见）。
+
+  **测试**（两条都做了变异验证，不是假绿）：
+  - `uploadEntries.spec.ts`（纯函数）已接入 `npm test`：递归展开、相对层级、
+    目录名校验、条目上限、空目录不入队、不支持 entry 时的回退。
+  - `check-folder-upload.mjs`（真实浏览器）已接入 `npm test:folder-upload` 与 CI：
+    断言队列是 3 个真实文件、**没有"同名文件夹条目"**、按层级建出目录
+    （`parent_id` 正确）、文件各落其目录。还原旧行为会报 **11 项**失败；
+    响应式守卫还原 `flex:none` 会报出"元素被裁剪祖先裁掉"。
+
+  **发布与部署**：PR #22 合并 `4173f36`（必需检查与新增的上传文件夹检查均通过，
+  已从 CI 日志确认该步骤真的执行）；web 镜像 digest `sha256:69449193…`
+  （与构建日志一致），按流程只更新 web（`--no-deps web`）：
+  `a1ce57d8…` → `69449193…`，api 未动。回滚点
+  `/root/landrive-update-20260925-025833`。
+
+  **生产验收**（经隧道，真实站点）：容器内产物含「上传文件夹」与 `webkitGetAsEntry`；
+  登录后用真实 token 拖入 `验收<时间戳>/子层/{a,b}.txt` + `c.txt`，结果：
+  建出 `验收…`(id 8) → `子层`(id 9, parent 8)，`a/b.txt` → folder 9、`c.txt` → folder 8，
+  队列 3 个文件、无报错。**验收产生的测试目录已删除**，线上数据回到
+  根目录 0 个 / 用户 2 / 回收站 2（与改动前一致）。
+
 - **2026-09-25 P24 换用新 logo + 补齐站点图标（PR #21）+ 部署**
 
   要求：把 logo 换上，并先对图片做预处理（加圆角）。
