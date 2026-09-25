@@ -109,9 +109,53 @@ for (const file of walk(SRC)) {
   }
 }
 
+// 6) 预览的类型观感必须统一（见 docs/design.md「预览观感统一」）。
+//
+//    为什么需要静态检查：观感不统一是**逐类型累积**出来的 —— 每个预览器当初
+//    各自决定了舞台底色、内边距、谁来滚动，单看任何一个都合理，摆在一起才割裂
+//    （docx 浅灰舞台 / pptx 深灰 / xlsx·text 全白 / pdf 没舞台）。这种漂移
+//    类型检查与单测都发现不了，只有把「不许各自为政」写成规则才守得住。
+const previewDir = path.join(SRC, 'components', 'preview')
+/** 各预览组件：只许画内容面，不许自带舞台底色 / 魔数高度。 */
+const PREVIEW_FILES = fs
+  .readdirSync(previewDir)
+  .filter((f) => f.endsWith('.vue'))
+  .map((f) => path.join(previewDir, f))
+
+/** 去掉 CSS 注释：否则「不再用 calc(100dvh - 魔数)」这类说明文字会被误判为违规。 */
+function stripCssComments(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
+for (const file of PREVIEW_FILES) {
+  const text = fs.readFileSync(file, 'utf8')
+  const style = stripCssComments((text.match(/<style[^>]*>([\s\S]*?)<\/style>/) || [, ''])[1])
+
+  // 6a) 不许自带舞台底色：舞台色只能由 PreviewView 的 .preview-stage 提供。
+  //     允许 paper / surface / code-bg 这些「内容面」颜色。
+  if (/background:\s*var\(--color-preview-stage\)/.test(style)) {
+    problems.push(`${file}: 预览组件自带 --color-preview-stage 舞台底色（舞台只能由 PreviewView 的 .preview-stage 提供，否则各类型底色会走样）`)
+  }
+
+  // 6b) 不许再用 calc(100dvh - 魔数) 限制高度：滚动归舞台/内容面自己撑满。
+  if (/calc\(\s*100dvh\s*-/.test(style)) {
+    problems.push(`${file}: 预览组件用了 calc(100dvh - 魔数) 限制高度（高度应交给统一骨架，避免各类型留白不一致）`)
+  }
+}
+
+// 6c) 舞台骨架必须存在且用统一令牌。
+const viewFile = path.join(SRC, 'views', 'PreviewView.vue')
+const viewText = fs.readFileSync(viewFile, 'utf8')
+if (!/\.preview-stage\b/.test(viewText)) {
+  problems.push(`${viewFile}: 缺少统一的 .preview-stage 骨架（所有预览类型必须共用同一个舞台）`)
+}
+if (!/padding:\s*var\(--preview-gutter\)\s+var\(--preview-pad\)/.test(viewText)) {
+  problems.push(`${viewFile}: .preview-stage 未使用统一的 --preview-gutter / --preview-pad 内边距`)
+}
+
 if (problems.length) {
-  console.error(`❌ 发现 ${problems.length} 处头部/卡片/空状态不一致：`)
+  console.error(`❌ 发现 ${problems.length} 处头部/卡片/空状态/预览一致性不一致：`)
   for (const p of problems) console.error('   - ' + p)
   process.exit(1)
 }
-console.log('✅ 头部结构检查通过：左筛选/右按钮、控件统一 34px、卡片圆角统一、空状态唯一')
+console.log('✅ 头部结构检查通过：左筛选/右按钮、控件统一 34px、卡片圆角统一、空状态唯一、预览舞台统一')

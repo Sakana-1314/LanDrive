@@ -284,6 +284,95 @@ try {
 
   check(errs.length === 0, `页面有 JS 运行时错误：${errs.slice(0, 2).join(' | ')}`)
 
+  // --- 7) 各类型的观感必须统一 ---
+  //     这是用户反馈的问题：同一份文件在不同类型下舞台底色/留白/滚动归属各不相同
+  //     （docx 浅灰舞台、pptx 深灰、xlsx·text 全白、pdf 干脆没舞台）。
+  //     静态检查（check-ui-consistency.mjs）只守「组件不许自带舞台」这条约定；
+  //     「运行时各类型的舞台真的算出同一个值」只有浏览器能量。
+  //     mock 对 docx/xlsx/png/pdf 回真实字节，因此这里真的走到了各自的渲染分支。
+  const STAGE = () => {
+    const stage = document.querySelector(
+      '.preview-page .preview-stage, .preview-page .preview-state'
+    )
+    if (!stage) return null
+    const cs = getComputedStyle(stage)
+    return {
+      cls: stage.className,
+      bg: cs.backgroundColor,
+      padding: `${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}`,
+      // 内容面（舞台的直接子元素）是否撑满舞台 —— 高度链断掉时这里会是 auto/0
+      childH: stage.firstElementChild
+        ? Math.round(stage.firstElementChild.getBoundingClientRect().height)
+        : 0,
+      stageH: Math.round(stage.getBoundingClientRect().height)
+    }
+  }
+
+  // mock 的行 id 与扩展名：1=xlsx 2=docx 3=pdf 4=png 6=csv
+  const kinds = [
+    ['1', 'xlsx'],
+    ['2', 'docx'],
+    ['3', 'pdf'],
+    ['4', 'png'],
+    ['6', 'text']
+  ]
+  const seen = []
+  for (const [id, label] of kinds) {
+    await page.goto(`${BASE}/preview/${id}?embed=1`, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    // office 类型要等库渲染完（动态 import + 解析）
+    await page.waitForTimeout(label === 'xlsx' || label === 'docx' ? 4000 : 1800)
+    const st = await page.evaluate(STAGE)
+    check(!!st, `${label} 类型没有渲染出统一舞台 .preview-stage`)
+    if (st) seen.push({ label, ...st })
+  }
+
+  if (seen.length >= 2) {
+    const first = seen[0]
+    for (const s of seen.slice(1)) {
+      check(
+        s.bg === first.bg,
+        `各类型舞台底色不统一：${first.label}=${first.bg} 但 ${s.label}=${s.bg}`
+      )
+      check(
+        s.padding === first.padding,
+        `各类型舞台留白不统一：${first.label}="${first.padding}" 但 ${s.label}="${s.padding}"`
+      )
+    }
+  }
+  // 舞台必须真的把内容面撑起来（高度链断了会退化成 0 / 贴顶）
+  for (const s of seen) {
+    check(
+      s.childH > s.stageH * 0.5,
+      `${s.label} 的内容面没有被舞台撑开（内容面 ${s.childH}px / 舞台 ${s.stageH}px）——高度链断了`
+    )
+  }
+
+  // --- 8) 窄屏下 pptx 不得被裁 ---
+  //     pptx-preview 的渲染宽度由我们传给它。此前写的是 Math.max(640, …)，
+  //     于是 390px 手机上幻灯片被硬渲染成 640px 宽、右侧 250px 直接被裁掉。
+  //     宽度必须跟着容器走（只设上限，不设下限）。
+  const mobile = await ctx.newPage()
+  await mobile.setViewportSize({ width: 390, height: 844 })
+  await mobile.goto(`${BASE}/preview/5?embed=1`, { waitUntil: 'domcontentloaded', timeout: 30000 })
+  await mobile.waitForTimeout(4500)
+  const narrow = await mobile.evaluate(() => {
+    const de = document.documentElement
+    const stage = document.querySelector('.preview-stage')
+    const slide = document.querySelector('.pptx-preview-wrapper')
+    return {
+      docOverflowX: de.scrollWidth - de.clientWidth,
+      stageScrollX: stage ? stage.scrollWidth - stage.clientWidth : null,
+      stageW: stage ? stage.clientWidth : null,
+      slideW: slide ? Math.round(slide.getBoundingClientRect().width) : null
+    }
+  })
+  check(narrow.docOverflowX <= 2, `390px 下页面横向溢出 ${narrow.docOverflowX}px`)
+  check(
+    narrow.stageScrollX !== null && narrow.stageScrollX <= 2,
+    `390px 下幻灯片被裁：幻灯片 ${narrow.slideW}px 宽，舞台只有 ${narrow.stageW}px（横向溢出 ${narrow.stageScrollX}px）`
+  )
+  await mobile.close()
+
   await ctx.close()
 } finally {
   await browser.close()

@@ -527,12 +527,47 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 - `?embed=1` 让预览页知道「自己被嵌着」，据此**不渲染返回键等自身 chrome**、铺满不留内边距；
   直接访问 `/preview/:id` 时保留一个左上角悬浮返回键，避免用户困住。
 - **深色适配**：预览专用令牌在 `styles.css`（`--color-preview-stage` / `-paper` /
-  `-code-bg` / `-code-border` / `-slide-backdrop`，明暗两档都覆盖）。约定是
+  `-code-bg` / `-code-border`，明暗两档都覆盖）。约定是
   「**纸张是内容、舞台是 UI**」：docx / pptx 库渲染出的白纸保持白色（那是文档自身样式），
   但纸张外的舞台底色、滚动区、边框必须走令牌，深色档下不能出现一块刺眼的浅灰底。
   注意 docx-preview 的类名由 `renderAsync` 的 `className` 派生
   （容器 `<className>-wrapper`、纸张 `section.<className>`），此前按默认的 `.docx-wrapper`
   写覆盖，**从未生效**。
+
+### 预览观感统一（所有类型共用一套骨架）
+
+**问题**：观感不统一是**逐类型累积**出来的 —— 每个预览器当初各自决定了舞台底色、
+内边距、圆角与「谁来滚动」，单看任何一个都合理，摆在一起才割裂：
+
+| 类型 | 改动前的舞台 | 问题 |
+| --- | --- | --- |
+| docx | 自绘浅灰 `#e9edf3` | 与 xlsx/text 的全白不一致 |
+| pptx | 自绘深灰 `#3d4148` | 浅色档下是一块深灰，最刺眼 |
+| xlsx / text | 自绘全白 | 与 docx/pptx 不一致 |
+| pdf | 无舞台 | 唯一没有统一骨架的类型 |
+| image / 音视频 | 又一套（媒体还用了第三块深灰底） | 各写各的 |
+
+**统一契约**（改 `PreviewView` 一处即改所有类型）：
+
+- 舞台唯一：所有可渲染类型都包在 `.preview-stage` 里，底色只用
+  `--color-preview-stage`；**预览组件不许自带舞台底色**（只画「内容面」）。
+- 留白唯一：`padding: var(--preview-gutter) var(--preview-pad) var(--preview-pad)`。
+  顶部更大是给悬浮的返回键/关闭键让位，否则会盖住内容自己的右上角控件
+  （文本预览的「复制全部」被盖过就是先例）。
+- 滚动唯一：各类型在**自己的内容面内部**滚，外层舞台不滚 —— 否则滚动时
+  纸张/卡片会跟内容一起滑走，视觉上「框没了」。
+- **禁用 `calc(100dvh - 魔数)`**：高度交给统一骨架，各预览自己撑满即可。
+  魔数是各类型留白不一致的直接来源。
+- 库的硬编码底要盖掉：`pptx-preview` 会把 wrapper 写成 `background:#000`，
+  不覆盖就出现「双重舞台」（我们的舞台外再套一圈黑底）。
+
+**守卫**：
+- `scripts/check-ui-consistency.mjs`（静态，进 `npm test`）：预览组件不许出现
+  `--color-preview-stage` 与 `calc(100dvh - …)`，且 `PreviewView` 必须存在
+  用统一令牌的 `.preview-stage`。检查前会剥掉 CSS 注释，避免说明文字被误判。
+- `scripts/check-preview.mjs`（真实浏览器）：把 docx/xlsx/png/pdf/text **真的渲染一遍**
+  （mock 对这些扩展名回真实字节），断言各类型的舞台底色与留白**完全一致**、
+  内容面被撑满、且 390px 窄屏下 pptx 不被裁。
 
 前端环境变量（构建期注入）：
 

@@ -99,9 +99,9 @@ watch(
 <template>
   <div class="xlsx-wrap">
     <n-alert v-if="error" type="error" :title="error" />
-    <n-spin v-else-if="loading" size="large" style="display: block; text-align: center; padding: 40px 0" />
+    <n-spin v-else-if="loading" size="large" class="sheet-loading" />
     <template v-else>
-      <n-tabs v-model:value="activeSheet" type="line" animated>
+      <n-tabs v-model:value="activeSheet" type="line" animated class="sheet-tabs">
         <n-tab-pane v-for="s in sheets" :key="s.name" :name="s.name" :tab="s.name">
           <n-alert v-if="s.truncated" type="warning" style="margin-bottom: 8px">
             表格较大，仅渲染前 {{ MAX_ROWS }} 行 / {{ MAX_COLS }} 列（实际 {{ s.totalRows }} 行 ×
@@ -117,7 +117,7 @@ watch(
               </tbody>
             </table>
           </div>
-          <n-text depth="3" style="font-size: 12px">
+          <n-text depth="3" class="sheet-summary">
             共 {{ s.rows.length }} 行 × {{ s.rows[0]?.length || 0 }} 列
             <n-tag size="tiny" :bordered="false" style="margin-left: 6px">只读预览</n-tag>
           </n-text>
@@ -128,19 +128,58 @@ watch(
 </template>
 
 <style scoped>
+/**
+ * 内容面契约（各预览统一）：组件只画「内容面」本身 ——
+ * 白/深色底 + 圆角 + 内边距，**不再自带舞台底色**（那由 PreviewView 的
+ * .preview-stage 唯一提供），也**不再用 calc(100dvh - 魔数)** 限制高度
+ * （滚动归舞台，组件撑满即可）。
+ */
 .xlsx-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   height: 100%;
-  padding: 12px;
+  padding: var(--preview-pad);
   border-radius: var(--radius-card);
   background: var(--color-surface);
 }
+
+.sheet-loading {
+  margin: auto;
+}
+
+/* 让 tabs 撑满内容面，表格滚动区才能拿到剩余高度 */
+.sheet-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.sheet-tabs :deep(.n-tabs-pane-wrapper) {
+  min-height: 0;
+  flex: 1;
+}
+.sheet-tabs :deep(.n-tab-pane) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 表格自己滚（不再靠 calc(100dvh - 220px) 这种魔数） */
 .sheet-scroll {
-  max-height: calc(100dvh - 220px);
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
   /* 表格是我们自己渲染的 UI（不是 Excel 的忠实版面），因此跟随明暗外观。 */
   background: var(--color-surface);
+}
+.sheet-summary {
+  margin-top: var(--space-xs);
+  margin-bottom: 0;
+  font-size: 12px;
 }
 .sheet {
   border-collapse: collapse;
