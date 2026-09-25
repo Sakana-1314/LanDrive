@@ -40,7 +40,6 @@ import {
 import type { FileItem, Folder } from '@/api/types'
 import FileTable from '@/components/FileTable.vue'
 import PageDropZone from '@/components/PageDropZone.vue'
-import UploadQueue from '@/components/UploadQueue.vue'
 import { useCreateShare } from '@/composables/useCreateShare'
 import { useUploadQueue } from '@/composables/useUploadQueue'
 import { entriesFromFileList, type UploadEntry } from '@/utils/uploadEntries'
@@ -248,17 +247,13 @@ function onSortChange(p: { sort: string; order: 'asc' | 'desc' }) {
 //
 // 上传只在「我的文件」开放：目标目录是「我的文件」当前所在的那一层，
 // 拖到任意位置、或点「上传文件」选文件，都落到同一处。
-// 队列状态与操作放在 useUploadQueue 里，两个入口共用同一份队列。
+// 队列状态在 stores/upload.ts 的全局单例里，右下角的浮窗展示它 ——
+// 所以传完之后切到别的页面，进度依然可见、可取消。
 const {
-  tasks: uploadTasks,
   uploadDisabled,
   prepare: prepareUpload,
   addFiles: addUploadFiles,
-  addEntries: addUploadEntries,
-  cancel: cancelUpload,
-  retry: retryUpload,
-  remove: removeUpload,
-  clearFinished: clearFinishedUploads
+  addEntries: addUploadEntries
 } = useUploadQueue({
   getFolderId: () => folderId.value,
   onUploaded: () => reload()
@@ -405,16 +400,11 @@ onMounted(() => {
         </li>
       </ul>
 
-      <!-- 上传队列只出现在「我的文件」：上传目标就是当前所在目录 -->
-      <UploadQueue
-        v-if="scope === 'mine'"
-        class="files-card__upload"
-        :tasks="uploadTasks"
-        @cancel="cancelUpload"
-        @retry="retryUpload"
-        @remove="removeUpload"
-        @clear-finished="clearFinishedUploads"
-      />
+      <!--
+        上传队列不在页面里：改到右下角的常驻浮窗（components/UploadPanel.vue，
+        挂在 MainLayout 上）。这样切到别的页面也能看到进度、取消任务，
+        同时列表上方不再被队列挤占版面。
+      -->
 
       <!--
         空状态由 FileTable 统一渲染（桌面表格的 #empty 与移动端卡片各一处）。
@@ -516,10 +506,6 @@ onMounted(() => {
 
 .files-card {
   min-width: 0;
-}
-
-.files-card__upload {
-  margin-bottom: var(--space-lg);
 }
 
 .folder-bar {

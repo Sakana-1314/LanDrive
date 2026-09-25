@@ -189,6 +189,9 @@ try {
     ])
     const dt = new DataTransfer()
     Object.defineProperty(dt, 'items', { value: [{ kind: 'file', webkitGetAsEntry: () => tree }] })
+    // 真实浏览器里拖入文件夹时 dataTransfer.files 就是**空的**（不只是一个
+    // 0 字节条目），如果这里塞一个文件夹 File 进去，就变成了一个真实浏览器
+    // 不会出现的输入，测试也随之失真。
     Object.defineProperty(dt, 'files', { value: [] })
     Object.defineProperty(dt, 'types', { value: ['Files'] })
     const mk = (type) => {
@@ -201,6 +204,14 @@ try {
     document.dispatchEvent(mk('drop'))
   })
   await page.waitForTimeout(3000)
+
+  // 队列现在在右下角的浮窗里（components/UploadPanel.vue），且全部传完会自动
+  // 收起成一行 —— 小文件几乎瞬间传完，所以这里必须先展开再读条目，
+  // 否则读到的是空列表（不是"目录没展开"，是"内容被收起来了"）。
+  if (await page.locator('.upload-panel.is-collapsed .upload-panel__head').count()) {
+    await page.locator('.upload-panel .upload-panel__head').click()
+    await page.waitForTimeout(200)
+  }
 
   const queue = await page.evaluate(() => ({
     names: [...document.querySelectorAll('.task__name')].map((e) => e.textContent.trim()),

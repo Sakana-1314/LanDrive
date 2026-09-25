@@ -8,10 +8,11 @@
     "build": "vite build",
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types src/api/network.spec.ts && node --experimental-strip-types src/api/base-url.spec.ts && node --experimental-strip-types src/api/health.spec.ts && node --experimental-strip-types src/utils/theme.spec.ts && node --experimental-strip-types src/utils/uploadEntries.spec.ts && node scripts/check-component-imports.mjs && node scripts/check-ui-consistency.mjs",
+    "test": "node --experimental-strip-types src/api/network.spec.ts && node --experimental-strip-types src/api/base-url.spec.ts && node --experimental-strip-types src/api/health.spec.ts && node --experimental-strip-types src/utils/theme.spec.ts && node --experimental-strip-types src/utils/uploadEntries.spec.ts && node --experimental-strip-types src/utils/uploadSummary.spec.ts && node scripts/check-component-imports.mjs && node scripts/check-ui-consistency.mjs",
     "test:entrypoint": "sh scripts/test-entrypoint.sh && sh scripts/check-no-internal-host.sh",
     "test:responsive": "node scripts/check-responsive.mjs",
-    "test:folder-upload": "node scripts/check-folder-upload.mjs"
+    "test:folder-upload": "node scripts/check-folder-upload.mjs",
+    "test:upload-panel": "node scripts/check-upload-panel.mjs"
   },
   "dependencies": {
     "@vicons/ionicons5": "^0.13.0",

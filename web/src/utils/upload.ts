@@ -158,6 +158,17 @@ export class UploadManager {
     this.callbacks = callbacks
   }
 
+  /**
+   * 切换续传记录所属的工号。
+   *
+   * manager 是全局单例（见 stores/upload.ts），而工号要等登录信息回来才知道，
+   * 因此不能只在构造时确定 —— 否则续传键会一直写成 'anon'，
+   * 换账号进去会把别人的会话当成自己的续传起点。
+   */
+  setEmployeeNo(employeeNo: string) {
+    this.employeeNo = employeeNo || 'anon'
+  }
+
   /** 设置后续新任务的目标文件夹（不影响已入队的任务）。 */
   setFolderId(id: number) {
     this.folderId = id > 0 ? id : 0

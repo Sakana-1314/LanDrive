@@ -11,6 +11,7 @@ import { NButton, NIcon, NProgress, NTag } from 'naive-ui'
 import { CheckmarkCircleOutline, TrashOutline } from '@vicons/ionicons5'
 import type { UploadTask } from '@/utils/upload'
 import { formatBytes, formatDuration, formatSpeed } from '@/utils/format'
+import { uploadStateLabel } from '@/utils/uploadSummary'
 
 const props = defineProps<{
   tasks: UploadTask[]
@@ -43,23 +44,9 @@ function progressStatus(t: UploadTask): 'default' | 'success' | 'error' | 'warni
   return 'default'
 }
 
+/** 状态文案与浮窗共用同一份口径（utils/uploadSummary.ts），避免两处各写一套。 */
 function stateLabel(t: UploadTask): string {
-  switch (t.state) {
-    case 'pending':
-      return '等待中'
-    case 'hashing':
-      return '校验中'
-    case 'uploading':
-      return t.resumed ? '续传中' : '上传中'
-    case 'merging':
-      return '合并中'
-    case 'done':
-      return '已完成'
-    case 'error':
-      return '失败'
-    case 'canceled':
-      return '已取消'
-  }
+  return uploadStateLabel(t.state, t.resumed)
 }
 
 function stateType(t: UploadTask): 'default' | 'success' | 'error' | 'warning' | 'info' {

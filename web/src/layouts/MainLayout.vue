@@ -48,6 +48,7 @@ import {
   SunnyOutline
 } from '@vicons/ionicons5'
 import { clearToken } from '@/api'
+import UploadPanel from '@/components/UploadPanel.vue'
 import type { OwnerAggregate } from '@/api/types'
 import { clearUser, isAdmin, state } from '@/stores/user'
 import { loadOwners, ownersState, togglePin } from '@/stores/owners'
@@ -398,6 +399,13 @@ function confirmLogout() {
       </n-layout-content>
     </n-layout>
   </n-layout>
+
+  <!--
+    右下角常驻的上传进度浮窗。挂在这里而不是页面里：上传会跨页面继续跑，
+    队列状态是全局单例（stores/upload.ts），浮窗因此能在任何页面显示进度。
+    队列为空时组件自身不渲染，平时不占版面。
+  -->
+  <UploadPanel />
 
   <!-- 移动端抽屉导航 -->
   <n-drawer v-model:show="drawerOpen" placement="left" :width="248">

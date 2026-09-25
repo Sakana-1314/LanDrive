@@ -199,6 +199,14 @@ jobs:
           REQUIRE_PLAYWRIGHT: "1"
         run: npm run test:folder-upload
 
+      # 右下角上传进度浮窗：逐文件进度要实时刷新、切页后仍在、失败不能被收起藏起来。
+      # 汇总口径有纯函数单测，但"浮窗真的渲染出来、切页还在动"只有真实浏览器能验。
+      - name: 上传进度浮窗检查（右下角常驻、逐文件实时进度）
+        working-directory: web
+        env:
+          REQUIRE_PLAYWRIGHT: "1"
+        run: npm run test:upload-panel
+
       - name: 校验构建产物
         working-directory: web
         run: |

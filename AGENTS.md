@@ -103,6 +103,15 @@
     展平逻辑集中在 `src/utils/uploadEntries.ts`；每个任务的 `folderId` 必须**自带**
     （同一批文件分属不同层级，不能用共享字段）。由 `uploadEntries.spec.ts` 与
     `npm run test:folder-upload`（真实浏览器，含建目录/落点断言）共同守卫。
+  - **上传进度浮窗**：队列状态是**全局单例**（`src/stores/upload.ts` 的
+    `uploadQueueState`），浮窗组件 `components/UploadPanel.vue` 挂在 `MainLayout` 上，
+    右下角常驻。**不要把队列状态放回页面组件**：组件一卸载队列就从界面上消失，
+    用户切页后看不到进度、也没法取消（这是被修掉的老问题）。
+    约定：空队列不渲染；全部传完自动收起，**有失败时保持展开**（失败不能被折叠藏住）；
+    汇总口径（按字节算总进度、速度只汇总进行中的任务、标题优先级）集中在
+    `src/utils/uploadSummary.ts`，由 `uploadSummary.spec.ts` 与
+    `npm run test:upload-panel`（真实浏览器：逐条进度条真的在涨、切页后仍在动、
+    失败不被收起）共同守卫。
 
 ## 6. 部署编排（docker-compose.yml）
 
