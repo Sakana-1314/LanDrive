@@ -207,6 +207,15 @@ jobs:
           REQUIRE_PLAYWRIGHT: "1"
         run: npm run test:upload-panel
 
+      # 文件夹不能单独占一块：需求要求像 Windows 资源管理器那样与文件同列。
+      # 行模型有纯函数单测，但"表格真的把两类行渲染在同一个列表里、点进去真的会进目录"
+      # 只有真实浏览器能验。
+      - name: 文件列表形态检查（文件夹与文件同列）
+        working-directory: web
+        env:
+          REQUIRE_PLAYWRIGHT: "1"
+        run: npm run test:file-list
+
       - name: 校验构建产物
         working-directory: web
         run: |

@@ -4,6 +4,10 @@
 // 为什么两套而不是让表格横向滚动：手机上左右拖动一张 6 列表格很难用，
 // 而文件列表的核心信息（名称、大小、时间、操作）在卡片上更易点。
 // 两套视图共用 useFileActions，增删改查逻辑只有一份。
+//
+// **文件夹与文件在同一个列表里**（Windows 资源管理器的行为）：此前子文件夹是
+// 表格上方单独的一坨卡片，同一个目录的两类东西被拆在两处，用户得上下扫两遍。
+// 现在由 utils/fileRows.ts 合成行（文件夹在前），表格与移动端卡片都渲染同一份行。
 import { computed, h, ref } from 'vue'
 import {
   NButton,
@@ -18,23 +22,39 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import {
+  ChevronForwardOutline,
   CreateOutline,
   DownloadOutline,
   EyeOutline,
+  FolderOpenOutline,
   LinkOutline,
   RefreshOutline,
   SearchOutline,
   TrashOutline
 } from '@vicons/ionicons5'
-import type { FileItem } from '@/api/types'
+import type { FileItem, Folder } from '@/api/types'
 import { extLabel, formatBytes, formatDaysLeft, formatTime, shorten } from '@/utils/format'
 import { extTagType } from '@/utils/theme'
+import {
+  buildRows,
+  filterFolders,
+  folderItemCount,
+  listSummary,
+  type BrowserRow
+} from '@/utils/fileRows'
 import { useFileActions } from '@/composables/useFileActions'
 import { useCreateShare } from '@/composables/useCreateShare'
 
 const props = withDefaults(
   defineProps<{
     items: FileItem[]
+    /**
+     * 当前目录的子文件夹。与 items 合成同一个列表（文件夹在前），
+     * 不再是表格上方另一块卡片。
+     */
+    folders?: Folder[]
+    /** 是否显示文件夹的分享/改名/删除按钮（只有自己的目录才有） */
+    folderEditable?: boolean
     loading?: boolean
     total: number
     page: number
@@ -55,6 +75,8 @@ const props = withDefaults(
     title?: string
   }>(),
   {
+    folders: () => [],
+    folderEditable: false,
     loading: false,
     showOwner: true,
     showExpiry: true,
@@ -72,7 +94,31 @@ const emit = defineEmits<{
   (e: 'update:keyword', v: string): void
   (e: 'refresh'): void
   (e: 'sort', payload: { sort: string; order: 'asc' | 'desc' }): void
+  /** 进入某个子目录 */
+  (e: 'open-folder', folder: Folder): void
+  (e: 'share-folder', folder: Folder): void
+  (e: 'rename-folder', folder: Folder): void
+  (e: 'delete-folder', folder: Folder): void
 }>()
+
+/**
+ * 合成后的行：文件夹在前、文件在后。
+ *
+ * 搜索时由 filterFolders 按**文件夹名**做本地匹配（服务端的关键字只作用于文件），
+ * 这样搜「报表」时既能看到匹配的文件、也还能进那个叫「报表」的目录。
+ */
+const rows = computed<BrowserRow[]>(() =>
+  buildRows({
+    folders: filterFolders(props.folders, props.keyword),
+    files: props.items,
+    page: props.page
+  })
+)
+
+/** 当前目录参与展示的文件夹数（用于分页条左侧的汇总文案）。 */
+const folderCount = computed(() => filterFolders(props.folders, props.keyword).length)
+
+const summaryText = computed(() => listSummary(folderCount.value, props.total))
 
 const actions = useFileActions({
   adminMode: props.adminMode,
@@ -116,28 +162,55 @@ function expiryType(days: number): 'error' | 'warning' | 'default' {
   return 'default'
 }
 
-const columns = computed<DataTableColumns<FileItem>>(() => {
-  const cols: DataTableColumns<FileItem> = [
+const columns = computed<DataTableColumns<BrowserRow>>(() => {
+  const cols: DataTableColumns<BrowserRow> = [
     {
-      title: '文件名',
+      title: '名称',
+      // key 必须是后端白名单里的 `original_name`：排序键会原样发给服务端
+      // （internal/store/files.go 的 sortColumn），改名会静默掉回 created_at。
       key: 'original_name',
-      sorter: true,
-      sortOrder: toNSort(sortOrder.value, 'original_name', sortKey.value),
       minWidth: 260,
+      /**
+       * 文件夹不参与服务端排序：`sort`/`order` 只是**文件**查询参数，
+       * 让文件夹跟着变会与服务端返回的顺序对不上（表格显示的箭头也会骗人）。
+       */
+      sorter: (a, b) => {
+        if (a.kind === 'folder' || b.kind === 'folder') return 0
+        return a.file.original_name.localeCompare(b.file.original_name, 'zh-Hans-CN')
+      },
+      sortOrder: toNSort(sortOrder.value, 'original_name', sortKey.value),
       render(row) {
+        if (row.kind === 'folder') {
+          return h(NSpace, { align: 'center', size: 8, wrap: false }, {
+            default: () => [
+              h(NIcon, { size: 18, color: 'var(--color-primary)' }, {
+                default: () => h(FolderOpenOutline)
+              }),
+              h(
+                'a',
+                {
+                  class: 'file-name folder-name',
+                  title: row.folder.name,
+                  onClick: () => emit('open-folder', row.folder)
+                },
+                shorten(row.folder.name, 44)
+              )
+            ]
+          })
+        }
         return h(NSpace, { align: 'center', size: 8, wrap: false }, {
           default: () => [
-            h(NTag, { size: 'small', type: extTagType(row.ext), bordered: false }, {
-              default: () => extLabel(row.ext)
+            h(NTag, { size: 'small', type: extTagType(row.file.ext), bordered: false }, {
+              default: () => extLabel(row.file.ext)
             }),
             h(
               'a',
               {
                 class: 'file-name',
-                title: row.original_name,
-                onClick: () => actions.openPreview(row)
+                title: row.file.original_name,
+                onClick: () => actions.openPreview(row.file)
               },
-              shorten(row.original_name, 44)
+              shorten(row.file.original_name, 44)
             )
           ]
         })
@@ -150,26 +223,37 @@ const columns = computed<DataTableColumns<FileItem>>(() => {
       title: '上传者',
       key: 'owner',
       width: 130,
-      render: (row) => row.owner_name
+      render: (row) => (row.kind === 'folder' ? row.folder.owner_name : row.file.owner_name)
     })
   }
 
   cols.push(
     {
+      // 文件夹没有"大小"：显示它直接包含的项数，与资源管理器的"X 个项目"一致。
       title: '大小',
       key: 'size_bytes',
-      width: 96,
-      sorter: true,
+      width: 104,
+      sorter: (a, b) => {
+        if (a.kind === 'folder' || b.kind === 'folder') return 0
+        return a.file.size_bytes - b.file.size_bytes
+      },
       sortOrder: toNSort(sortOrder.value, 'size_bytes', sortKey.value),
-      render: (row) => formatBytes(row.size_bytes)
+      render: (row) =>
+        row.kind === 'folder'
+          ? h('span', { class: 'folder-count' }, `${folderItemCount(row.folder)} 项`)
+          : formatBytes(row.file.size_bytes)
     },
     {
       title: '上传时间',
       key: 'created_at',
       width: 150,
-      sorter: true,
+      sorter: (a, b) => {
+        if (a.kind === 'folder' || b.kind === 'folder') return 0
+        return a.file.created_at.localeCompare(b.file.created_at)
+      },
       sortOrder: toNSort(sortOrder.value, 'created_at', sortKey.value),
-      render: (row) => formatTime(row.created_at)
+      render: (row) =>
+        row.kind === 'folder' ? '—' : formatTime(row.file.created_at)
     }
   )
 
@@ -178,13 +262,17 @@ const columns = computed<DataTableColumns<FileItem>>(() => {
       title: '到期',
       key: 'expires_at',
       width: 150,
-      sorter: true,
+      sorter: (a, b) => {
+        if (a.kind === 'folder' || b.kind === 'folder') return 0
+        return a.file.days_left - b.file.days_left
+      },
       sortOrder: toNSort(sortOrder.value, 'expires_at', sortKey.value),
       render(row) {
+        if (row.kind === 'folder') return '—'
         return h(
           NTag,
-          { size: 'small', type: expiryType(row.days_left), bordered: false },
-          { default: () => formatDaysLeft(row.days_left) }
+          { size: 'small', type: expiryType(row.file.days_left), bordered: false },
+          { default: () => formatDaysLeft(row.file.days_left) }
         )
       }
     })
@@ -195,13 +283,15 @@ const columns = computed<DataTableColumns<FileItem>>(() => {
       title: '删除时间',
       key: 'deleted_at',
       width: 150,
-      render: (row) => (row.deleted_at ? formatTime(row.deleted_at) : '—')
+      render: (row) =>
+        row.kind === 'folder' || !row.file.deleted_at ? '—' : formatTime(row.file.deleted_at)
     })
     cols.push({
       title: '彻底删除',
       key: 'purge_at',
       width: 150,
-      render: (row) => (row.purge_at ? formatTime(row.purge_at) : '—')
+      render: (row) =>
+        row.kind === 'folder' || !row.file.purge_at ? '—' : formatTime(row.file.purge_at)
     })
   }
 
@@ -211,20 +301,55 @@ const columns = computed<DataTableColumns<FileItem>>(() => {
     width: props.adminMode ? 210 : props.readonly ? 120 : 215,
     fixed: 'right',
     render(row) {
+      if (row.kind === 'folder') {
+        const folderButtons = [
+          h(NButton, { size: 'small', quaternary: true, onClick: () => emit('open-folder', row.folder) }, {
+            icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) }),
+            default: () => '打开'
+          })
+        ]
+        if (props.folderEditable) {
+          folderButtons.push(
+            h(NButton, { size: 'small', quaternary: true, type: 'primary', onClick: () => emit('share-folder', row.folder) }, {
+              icon: () => h(NIcon, null, { default: () => h(LinkOutline) }),
+              default: () => '分享'
+            }),
+            h(NButton, { size: 'small', quaternary: true, onClick: () => emit('rename-folder', row.folder) }, {
+              icon: () => h(NIcon, null, { default: () => h(CreateOutline) }),
+              default: () => '重命名'
+            }),
+            h(
+              NPopconfirm,
+              { onPositiveClick: () => emit('delete-folder', row.folder) },
+              {
+                trigger: () =>
+                  h(NButton, { size: 'small', quaternary: true, type: 'error' }, {
+                    icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
+                    default: () => '删除'
+                  }),
+                default: () => `删除「${row.folder.name}」？`
+              }
+            )
+          )
+        }
+        return h(NSpace, { size: 2, wrap: false }, { default: () => folderButtons })
+      }
+
+      const file = row.file
       const buttons = [
-        h(NButton, { size: 'small', quaternary: true, onClick: () => actions.openPreview(row) }, {
+        h(NButton, { size: 'small', quaternary: true, onClick: () => actions.openPreview(file) }, {
           icon: () => h(NIcon, null, { default: () => h(EyeOutline) }),
           default: () => '预览'
         }),
-        h(NButton, { size: 'small', quaternary: true, onClick: () => actions.onDownload(row) }, {
+        h(NButton, { size: 'small', quaternary: true, onClick: () => actions.onDownload(file) }, {
           icon: () => h(NIcon, null, { default: () => h(DownloadOutline) }),
           default: () => '下载'
         })
       ]
 
-      if (canShare(row)) {
+      if (canShare(file)) {
         buttons.push(
-          h(NButton, { size: 'small', quaternary: true, type: 'primary', onClick: () => onShare(row) }, {
+          h(NButton, { size: 'small', quaternary: true, type: 'primary', onClick: () => onShare(file) }, {
             icon: () => h(NIcon, null, { default: () => h(LinkOutline) }),
             default: () => '分享'
           })
@@ -232,22 +357,22 @@ const columns = computed<DataTableColumns<FileItem>>(() => {
       }
 
       if (props.adminMode) {
-        if (row.status === 'trashed') {
+        if (file.status === 'trashed') {
           buttons.push(
-            h(NButton, { size: 'small', quaternary: true, type: 'primary', onClick: () => actions.onRestore(row) }, {
+            h(NButton, { size: 'small', quaternary: true, type: 'primary', onClick: () => actions.onRestore(file) }, {
               icon: () => h(NIcon, null, { default: () => h(RefreshOutline) }),
               default: () => '恢复'
             }),
             h(
               NPopconfirm,
-              { onPositiveClick: () => actions.confirmPurge(row) },
+              { onPositiveClick: () => actions.confirmPurge(file) },
               {
                 trigger: () =>
                   h(NButton, { size: 'small', quaternary: true, type: 'error' }, {
                     icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
                     default: () => '彻底删除'
                   }),
-                default: () => `永久删除「${row.original_name}」？`
+                default: () => `永久删除「${file.original_name}」？`
               }
             )
           )
@@ -255,34 +380,34 @@ const columns = computed<DataTableColumns<FileItem>>(() => {
           buttons.push(
             h(
               NPopconfirm,
-              { onPositiveClick: () => actions.confirmDelete(row) },
+              { onPositiveClick: () => actions.confirmDelete(file) },
               {
                 trigger: () =>
                   h(NButton, { size: 'small', quaternary: true, type: 'error' }, {
                     icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
                     default: () => '删除'
                   }),
-                default: () => `删除「${row.original_name}」？`
+                default: () => `删除「${file.original_name}」？`
               }
             )
           )
         }
-      } else if (!props.readonly && row.can_edit) {
+      } else if (!props.readonly && file.can_edit) {
         buttons.push(
-          h(NButton, { size: 'small', quaternary: true, onClick: () => actions.onRename(row) }, {
+          h(NButton, { size: 'small', quaternary: true, onClick: () => actions.onRename(file) }, {
             icon: () => h(NIcon, null, { default: () => h(CreateOutline) }),
             default: () => '重命名'
           }),
           h(
             NPopconfirm,
-            { onPositiveClick: () => actions.confirmDelete(row) },
+            { onPositiveClick: () => actions.confirmDelete(file) },
             {
               trigger: () =>
                 h(NButton, { size: 'small', quaternary: true, type: 'error' }, {
                   icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
                   default: () => '删除'
                 }),
-              default: () => `删除「${row.original_name}」？`
+              default: () => `删除「${file.original_name}」？`
             }
           )
         )
@@ -300,7 +425,8 @@ const pagination = computed(() => ({
   itemCount: props.total,
   showSizePicker: true,
   pageSizes: [10, 20, 50, 100],
-  prefix: (info: { itemCount?: number }) => `共 ${info.itemCount ?? 0} 个`
+  // 汇总文案要区分文件与文件夹：分页只对**文件**生效（文件夹只在第 1 页列出）
+  prefix: () => summaryText.value
 }))
 </script>
 
@@ -341,10 +467,13 @@ const pagination = computed(() => ({
     <div class="desktop-only">
       <n-data-table
         :columns="columns"
-        :data="items"
+        :data="rows"
         :loading="loading"
         :pagination="pagination"
-        :row-key="(row: FileItem) => row.id"
+        :row-key="(row: BrowserRow) => row.key"
+        :row-props="
+          (row: BrowserRow) => (row.kind === 'folder' ? { class: 'row-folder' } : {})
+        "
         remote
         size="small"
         :scroll-x="props.showOwner ? 1180 : 1050"
@@ -365,84 +494,120 @@ const pagination = computed(() => ({
 
     <!-- 移动端卡片列表（≤768px） -->
     <div class="mobile-only">
-      <n-empty v-if="!items.length && !loading" description="暂无文件" style="padding: 32px 0" />
+      <n-empty v-if="!rows.length && !loading" description="暂无文件" style="padding: 32px 0" />
       <ul v-else class="card-list">
-        <li v-for="row in items" :key="row.id" class="file-card">
-          <div class="file-card__head" @click="actions.openPreview(row)">
-            <n-tag size="small" :type="extTagType(row.ext)" :bordered="false">
-              {{ extLabel(row.ext) }}
+        <li v-for="row in rows" :key="row.key" class="file-card">
+          <!-- 文件夹卡片：点整行进入目录 -->
+          <template v-if="row.kind === 'folder'">
+            <div class="file-card__head" @click="emit('open-folder', row.folder)">
+              <n-icon :size="20" color="var(--color-primary)"><folder-open-outline /></n-icon>
+              <span class="file-card__name">{{ row.folder.name }}</span>
+              <!-- 箭头明示"可进入"：移动端没有静态"打开"按钮，光有下划线看不出来 -->
+              <n-icon class="file-card__enter" :size="16"><chevron-forward-outline /></n-icon>
+            </div>
+
+            <div class="file-card__meta">
+              <span>{{ folderItemCount(row.folder) }} 项</span>
+              <span v-if="props.showOwner">{{ row.folder.owner_name }}</span>
+            </div>
+
+            <div v-if="props.folderEditable" class="file-card__foot">
+              <span class="file-card__spacer" />
+              <n-button size="small" quaternary type="primary" @click="emit('share-folder', row.folder)">
+                <template #icon>
+                  <n-icon><link-outline /></n-icon>
+                </template>
+              </n-button>
+              <n-button size="small" quaternary @click="emit('rename-folder', row.folder)">
+                <template #icon>
+                  <n-icon><create-outline /></n-icon>
+                </template>
+              </n-button>
+              <n-button size="small" quaternary type="error" @click="emit('delete-folder', row.folder)">
+                <template #icon>
+                  <n-icon><trash-outline /></n-icon>
+                </template>
+              </n-button>
+            </div>
+          </template>
+
+          <template v-else>
+          <div class="file-card__head" @click="actions.openPreview(row.file)">
+            <n-tag size="small" :type="extTagType(row.file.ext)" :bordered="false">
+              {{ extLabel(row.file.ext) }}
             </n-tag>
-            <span class="file-card__name">{{ row.original_name }}</span>
+            <span class="file-card__name">{{ row.file.original_name }}</span>
           </div>
 
           <div class="file-card__meta">
-            <span>{{ formatBytes(row.size_bytes) }}</span>
-            <span v-if="props.showOwner">{{ row.owner_name }}</span>
-            <span>{{ formatTime(row.created_at) }}</span>
+            <span>{{ formatBytes(row.file.size_bytes) }}</span>
+            <span v-if="props.showOwner">{{ row.file.owner_name }}</span>
+            <span>{{ formatTime(row.file.created_at) }}</span>
           </div>
 
           <div class="file-card__foot">
             <n-tag
               v-if="props.showExpiry && !props.adminMode"
               size="small"
-              :type="expiryType(row.days_left)"
+              :type="expiryType(row.file.days_left)"
               :bordered="false"
             >
-              {{ formatDaysLeft(row.days_left) }}
+              {{ formatDaysLeft(row.file.days_left) }}
             </n-tag>
-            <n-tag v-else-if="props.adminMode && row.status === 'trashed'" size="small" type="error" :bordered="false">
+            <n-tag v-else-if="props.adminMode && row.file.status === 'trashed'" size="small" type="error" :bordered="false">
               待清理
             </n-tag>
-            <n-tag v-if="props.adminMode && row.purge_at" size="small" :bordered="false">
-              {{ formatTime(row.purge_at) }} 清理
+            <n-tag v-if="props.adminMode && row.file.purge_at" size="small" :bordered="false">
+              {{ formatTime(row.file.purge_at) }} 清理
             </n-tag>
             <span class="file-card__spacer" />
-            <n-button size="small" quaternary @click="actions.openPreview(row)">
+            <n-button size="small" quaternary @click="actions.openPreview(row.file)">
               <template #icon>
                 <n-icon><eye-outline /></n-icon>
               </template>
             </n-button>
-            <n-button size="small" quaternary @click="actions.onDownload(row)">
+            <n-button size="small" quaternary @click="actions.onDownload(row.file)">
               <template #icon>
                 <n-icon><download-outline /></n-icon>
               </template>
             </n-button>
             <template v-if="props.adminMode">
               <n-button
-                v-if="row.status === 'trashed'"
+                v-if="row.file.status === 'trashed'"
                 size="small"
                 quaternary
                 type="primary"
-                @click="actions.onRestore(row)"
+                @click="actions.onRestore(row.file)"
               >
                 恢复
               </n-button>
               <n-button
-                v-if="row.status === 'trashed'"
+                v-if="row.file.status === 'trashed'"
                 size="small"
                 quaternary
                 type="error"
-                @click="actions.confirmPurge(row)"
+                @click="actions.confirmPurge(row.file)"
               >
                 彻底删除
               </n-button>
-              <n-button v-else size="small" quaternary type="error" @click="actions.confirmDelete(row)">
+              <n-button v-else size="small" quaternary type="error" @click="actions.confirmDelete(row.file)">
                 删除
               </n-button>
             </template>
-            <template v-else-if="!props.readonly && row.can_edit">
-              <n-button size="small" quaternary @click="actions.onRename(row)">
+            <template v-else-if="!props.readonly && row.file.can_edit">
+              <n-button size="small" quaternary @click="actions.onRename(row.file)">
                 <template #icon>
                   <n-icon><create-outline /></n-icon>
                 </template>
               </n-button>
-              <n-button size="small" quaternary type="error" @click="actions.confirmDelete(row)">
+              <n-button size="small" quaternary type="error" @click="actions.confirmDelete(row.file)">
                 <template #icon>
                   <n-icon><trash-outline /></n-icon>
                 </template>
               </n-button>
             </template>
           </div>
+          </template>
         </li>
       </ul>
 
@@ -493,6 +658,21 @@ const pagination = computed(() => ({
 
 .file-list :deep(.file-name:hover) {
   text-decoration: underline;
+}
+
+/* 文件夹名比文件名更重：列表里两类行混排时，一眼能分出"能进去的"和"能打开的" */
+.file-list :deep(.folder-name) {
+  font-weight: 600;
+}
+
+/* 文件夹不显示"大小"而是项数，弱化一档，避免与文件大小抢注意力 */
+.file-list :deep(.folder-count) {
+  color: var(--color-text-muted);
+}
+
+/* 文件夹行给一点底色：资源管理器里文件夹也是与文件区分开的 */
+.file-list :deep(.row-folder td) {
+  background: var(--color-surface-soft);
 }
 
 /* ---------- 移动端卡片 ---------- */
@@ -554,6 +734,13 @@ const pagination = computed(() => ({
 
 .file-card__spacer {
   flex: 1;
+}
+
+/* 移动端文件夹卡片的"可进入"箭头：靠右、弱化，不与文件名抢注意力 */
+.file-card__enter {
+  flex: none;
+  margin-left: auto;
+  color: var(--color-text-muted);
 }
 
 .mobile-pager {
