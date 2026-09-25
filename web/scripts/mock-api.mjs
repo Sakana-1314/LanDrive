@@ -67,6 +67,16 @@ const readBody = (req) =>
     req.on('error', () => resolve(''))
   })
 
+// 分片上传的 mock 会话。检查"上传进度浮窗"必须真的走一遍上传流程：
+// 分片 PUT 故意加延时，否则几毫秒就传完，浮窗上的进度根本来不及被观察到。
+const UPLOADS = new Map()
+const MOCK_CHUNK_SIZE = 1024 * 1024 // 1MB
+// 每片延时：浮窗要能被"看见在动"，太快的话进度还没渲染就传完了。
+// 6MB 的文件 = 6 片、3 个并发 → 2 轮 ≈ 1.8s，足够观察与切页。
+const CHUNK_DELAY_MS = 900
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
 // 文件夹与分享的 mock 数据。刻意包含：空目录（file_count=0，不应被当成已删除）、
 // 已过期、目标已删除三种分享状态，让响应式检查覆盖到这些分支的布局。
 const FOLDERS = [
@@ -195,9 +205,81 @@ http
     }
     if (p === '/api/uploads/config')
       return json(res, {
-        allow_all: true, allowed_extensions: null, chunk_size: 4194304, chunk_size_mb: 4,
+        allow_all: true, allowed_extensions: null, chunk_size: MOCK_CHUNK_SIZE, chunk_size_mb: 1,
         max_file_size: 524288000, max_file_size_mb: 500, upload_enabled: true
       })
+    // --- 分片上传（供上传进度浮窗的端到端检查使用）---
+    if (p === '/api/uploads/init') {
+      return readBody(req).then((body) => {
+        let payload = {}
+        try { payload = JSON.parse(body || '{}') } catch { /* 保持空 */ }
+        const size = Number(payload.file_size || 0)
+        const total = Math.max(1, Math.ceil(size / MOCK_CHUNK_SIZE))
+        const session = {
+          upload_id: `mock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          original_name: String(payload.file_name || ''),
+          ext: '',
+          size_bytes: size,
+          chunk_size: MOCK_CHUNK_SIZE,
+          total_chunks: total,
+          received_bytes: 0,
+          status: 'uploading',
+          uploaded: [],
+          folder_id: Number(payload.folder_id || 0),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+        UPLOADS.set(session.upload_id, session)
+        return json(res, session)
+      })
+    }
+    const chunkMatch = p.match(/^\/api\/uploads\/([^/]+)\/chunks\/(\d+)$/)
+    if (chunkMatch && req.method === 'PUT') {
+      const session = UPLOADS.get(chunkMatch[1])
+      if (!session) return json(res, { error: '上传会话不存在' }, 410)
+      const idx = Number(chunkMatch[2])
+      return readBody(req).then(async (body) => {
+        // 模拟真实分片耗时：太快的话浮窗的进度还没渲染就已经传完了
+        await sleep(CHUNK_DELAY_MS)
+        // 文件名里带「失败」的会话固定报 500：用来验证浮窗对失败态的处理
+        // （失败必须留在展开状态，不能被自动收起藏起来）。
+        if (session.original_name.includes('失败')) {
+          return json(res, { error: 'mock 上传失败' }, 500)
+        }
+        if (!session.uploaded.includes(idx)) {
+          session.uploaded.push(idx)
+          session.received_bytes += Buffer.byteLength(body)
+        }
+        session.updated_at = new Date().toISOString()
+        return json(res, { received_bytes: session.received_bytes, uploaded: session.uploaded })
+      })
+    }
+    const completeMatch = p.match(/^\/api\/uploads\/([^/]+)\/complete$/)
+    if (completeMatch && req.method === 'POST') {
+      const session = UPLOADS.get(completeMatch[1])
+      if (!session) return json(res, { error: '上传会话不存在' }, 410)
+      session.status = 'done'
+      const file = {
+        ...FILES[0],
+        id: FILES.length + 1,
+        original_name: session.original_name,
+        size_bytes: session.size_bytes,
+        created_at: new Date().toISOString()
+      }
+      FILES.push(file)
+      return json(res, { file, created: true, sha256: 'b'.repeat(64) })
+    }
+    const uploadMatch = p.match(/^\/api\/uploads\/([^/]+)$/)
+    if (uploadMatch && req.method === 'DELETE') {
+      UPLOADS.delete(uploadMatch[1])
+      res.writeHead(204)
+      return res.end()
+    }
+    if (uploadMatch && req.method === 'GET') {
+      const session = UPLOADS.get(uploadMatch[1])
+      if (!session) return json(res, { error: '上传会话不存在' }, 410)
+      return json(res, session)
+    }
     if (p === '/api/admin/stats')
       return json(res, {
         users: 3, files: FILES.length, trashed: 2, total_bytes: 23456789,
