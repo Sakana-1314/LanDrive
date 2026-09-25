@@ -25,9 +25,7 @@ import {
   CloudUploadOutline,
   CreateOutline,
   FolderOpenOutline,
-  HomeOutline,
-  LinkOutline,
-  TrashOutline
+  HomeOutline
 } from '@vicons/ionicons5'
 import {
   createFolder,
@@ -43,7 +41,6 @@ import PageDropZone from '@/components/PageDropZone.vue'
 import { useCreateShare } from '@/composables/useCreateShare'
 import { useUploadQueue } from '@/composables/useUploadQueue'
 import { entriesFromFileList, type UploadEntry } from '@/utils/uploadEntries'
-import { formatBytes } from '@/utils/format'
 import { loadOwners, ownersState } from '@/stores/owners'
 
 const route = useRoute()
@@ -374,36 +371,10 @@ onMounted(() => {
         管理员已暂停上传功能。
       </n-alert>
 
-      <!-- 子目录卡片 -->
-      <ul v-if="folders.length" class="folder-grid">
-        <li v-for="f in folders" :key="f.id" class="folder-item">
-          <button class="folder-main" type="button" @click="enterFolder(f)">
-            <n-icon :size="20" color="var(--color-primary)"><folder-open-outline /></n-icon>
-            <span class="folder-name" :title="f.name">{{ f.name }}</span>
-            <span class="folder-meta">
-              {{ f.file_count }} 个文件
-              <template v-if="f.sub_folder_count"> · {{ f.sub_folder_count }} 个文件夹</template>
-              <template v-if="f.used_bytes"> · {{ formatBytes(f.used_bytes) }}</template>
-            </span>
-          </button>
-          <div v-if="scope === 'mine'" class="folder-tools">
-            <n-button size="small" quaternary type="primary" @click="onShareFolder(f)">
-              <template #icon><n-icon><link-outline /></n-icon></template>
-            </n-button>
-            <n-button size="small" quaternary @click="openRenameFolder(f)">
-              <template #icon><n-icon><create-outline /></n-icon></template>
-            </n-button>
-            <n-button size="small" quaternary type="error" @click="confirmDeleteFolder(f)">
-              <template #icon><n-icon><trash-outline /></n-icon></template>
-            </n-button>
-          </div>
-        </li>
-      </ul>
-
       <!--
-        上传队列不在页面里：改到右下角的常驻浮窗（components/UploadPanel.vue，
-        挂在 MainLayout 上）。这样切到别的页面也能看到进度、取消任务，
-        同时列表上方不再被队列挤占版面。
+        文件夹与文件在同一个列表里（FileTable 内部合成行，文件夹在前）：
+        此前子文件夹是这里单独的一坨卡片，同一个目录的两类东西被拆在两处，
+        用户得上下扫两遍才知道这一层有什么。现在对齐 Windows 资源管理器的形态。
       -->
 
       <!--
@@ -416,6 +387,8 @@ onMounted(() => {
         v-model:keyword="keyword"
         :title="scope === 'all' ? ownerLabel : ''"
         :items="items"
+        :folders="folders"
+        :folder-editable="scope === 'mine'"
         :loading="loading"
         :total="total"
         :show-owner="scope === 'all'"
@@ -425,6 +398,10 @@ onMounted(() => {
         @update:page-size="(v: number) => (pageSize = v)"
         @refresh="reload"
         @sort="onSortChange"
+        @open-folder="enterFolder"
+        @share-folder="onShareFolder"
+        @rename-folder="openRenameFolder"
+        @delete-folder="confirmDeleteFolder"
       />
     </n-card>
 
@@ -579,70 +556,11 @@ onMounted(() => {
   color: var(--color-border);
 }
 
-.folder-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
-  margin: 0 0 var(--space-lg);
-  padding: 0;
-  list-style: none;
-}
-
-.folder-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-control);
-  background: var(--color-surface);
-}
-
-.folder-main {
-  display: grid;
-  flex: 1;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 2px 9px;
-  align-items: center;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  text-align: left;
-  background: transparent;
-  cursor: pointer;
-}
-
-.folder-name {
-  overflow: hidden;
-  color: var(--color-text-strong);
-  font-size: 14px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.folder-meta {
-  grid-column: 2;
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
-
-.folder-tools {
-  display: flex;
-  flex: none;
-  gap: 0;
-}
-
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-@media (max-width: 768px) {
-  .folder-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
+
 </style>
