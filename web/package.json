@@ -13,7 +13,8 @@
     "test:responsive": "node scripts/check-responsive.mjs",
     "test:folder-upload": "node scripts/check-folder-upload.mjs",
     "test:upload-panel": "node scripts/check-upload-panel.mjs",
-    "test:file-list": "node scripts/check-file-list.mjs"
+    "test:file-list": "node scripts/check-file-list.mjs",
+    "test:preview": "node scripts/check-preview.mjs"
   },
   "dependencies": {
     "@vicons/ionicons5": "^0.13.0",

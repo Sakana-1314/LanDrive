@@ -51,11 +51,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .pptx-wrap {
-  background: #525659;
+  height: 100%;
   padding: 12px;
-  border-radius: 8px;
   overflow: auto;
-  max-height: calc(100vh - 130px);
+  border-radius: var(--radius-card);
+  /* 幻灯片外的舞台：深色档下跟着变深，避免深色界面里一块浅灰底。 */
+  background: var(--color-preview-slide-backdrop);
 }
 .pptx-host {
   margin: 0 auto;

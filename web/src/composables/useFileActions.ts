@@ -2,8 +2,7 @@
 //
 // 组件只负责「拿到一行文件后能做什么」，不关心渲染形态。
 import { h, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { NInput, useDialog, useMessage } from 'naive-ui'
+import { useDialog, useMessage, NInput } from 'naive-ui'
 import {
   adminPurgeFile,
   adminRestoreFile,
@@ -13,6 +12,7 @@ import {
   renameFile
 } from '@/api'
 import type { FileItem } from '@/api/types'
+import { openPreview } from '@/stores/preview'
 
 export interface FileActionsOptions {
   adminMode?: boolean
@@ -21,13 +21,15 @@ export interface FileActionsOptions {
 }
 
 export function useFileActions(options: FileActionsOptions) {
-  const router = useRouter()
   const message = useMessage()
   const dialog = useDialog()
 
-  function openPreview(row: FileItem) {
-    const url = router.resolve({ name: 'preview', params: { id: row.id } })
-    window.open(url.href, '_blank')
+  /**
+   * 打开预览：在列表页内弹层呈现（iframe），不再 window.open 新标签。
+   * 弹层挂在 MainLayout 上，这里只负责把「要看哪个文件」写进全局状态。
+   */
+  function onOpenPreview(row: FileItem) {
+    openPreview(row.id)
   }
 
   async function onDownload(row: FileItem) {
@@ -123,7 +125,7 @@ export function useFileActions(options: FileActionsOptions) {
   }
 
   return {
-    openPreview,
+    onOpenPreview,
     onDownload,
     onRename,
     confirmDelete,

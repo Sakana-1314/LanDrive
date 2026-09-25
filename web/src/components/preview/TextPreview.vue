@@ -82,17 +82,19 @@ watch(
 
 <style scoped>
 .text-wrap {
-  background: #fff;
+  height: 100%;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
 }
 .text-content {
   margin: 0;
-  max-height: calc(100vh - 200px);
+  max-height: calc(100dvh - 190px);
   overflow: auto;
-  background: #fafbfc;
-  border: 1px solid #eee;
-  border-radius: 6px;
+  color: var(--color-text);
+  background: var(--color-preview-code-bg);
+  border: 1px solid var(--color-preview-code-border);
+  border-radius: var(--radius-control);
   padding: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12.5px;

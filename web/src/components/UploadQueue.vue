@@ -6,12 +6,12 @@
 // 入口改到页面工具条的「上传文件」按钮 + 整页拖放（FilesView 里），
 // 组件本身则退化成纯粹的队列视图。
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { NButton, NIcon, NProgress, NTag } from 'naive-ui'
 import { CheckmarkCircleOutline, TrashOutline } from '@vicons/ionicons5'
 import type { UploadTask } from '@/utils/upload'
 import { formatBytes, formatDuration, formatSpeed } from '@/utils/format'
 import { uploadStateLabel } from '@/utils/uploadSummary'
+import { openPreview } from '@/stores/preview'
 
 const props = defineProps<{
   tasks: UploadTask[]
@@ -23,8 +23,6 @@ const emit = defineEmits<{
   (e: 'remove', task: UploadTask): void
   (e: 'clear-finished'): void
 }>()
-
-const router = useRouter()
 
 const activeCount = computed(
   () =>
@@ -57,10 +55,9 @@ function stateType(t: UploadTask): 'default' | 'success' | 'error' | 'warning' |
   return 'default'
 }
 
+/** 预览刚传完的文件：与列表页同一入口（弹层内 iframe），不再新开标签。 */
 function previewFile(t: UploadTask) {
-  if (t.result) {
-    window.open(router.resolve({ name: 'preview', params: { id: t.result.id } }).href, '_blank')
-  }
+  if (t.result) openPreview(t.result.id)
 }
 
 /**

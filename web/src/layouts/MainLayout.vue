@@ -48,6 +48,7 @@ import {
   SunnyOutline
 } from '@vicons/ionicons5'
 import { clearToken } from '@/api'
+import PreviewModal from '@/components/PreviewModal.vue'
 import UploadPanel from '@/components/UploadPanel.vue'
 import type { OwnerAggregate } from '@/api/types'
 import { clearUser, isAdmin, state } from '@/stores/user'
@@ -405,6 +406,7 @@ function confirmLogout() {
     队列状态是全局单例（stores/upload.ts），浮窗因此能在任何页面显示进度。
     队列为空时组件自身不渲染，平时不占版面。
   -->
+  <PreviewModal />
   <UploadPanel />
 
   <!-- 移动端抽屉导航 -->

@@ -208,7 +208,7 @@ const columns = computed<DataTableColumns<BrowserRow>>(() => {
               {
                 class: 'file-name',
                 title: row.file.original_name,
-                onClick: () => actions.openPreview(row.file)
+                onClick: () => actions.onOpenPreview(row.file)
               },
               shorten(row.file.original_name, 44)
             )
@@ -337,7 +337,7 @@ const columns = computed<DataTableColumns<BrowserRow>>(() => {
 
       const file = row.file
       const buttons = [
-        h(NButton, { size: 'small', quaternary: true, onClick: () => actions.openPreview(file) }, {
+        h(NButton, { size: 'small', quaternary: true, onClick: () => actions.onOpenPreview(file) }, {
           icon: () => h(NIcon, null, { default: () => h(EyeOutline) }),
           default: () => '预览'
         }),
@@ -532,7 +532,7 @@ const pagination = computed(() => ({
           </template>
 
           <template v-else>
-          <div class="file-card__head" @click="actions.openPreview(row.file)">
+          <div class="file-card__head" @click="actions.onOpenPreview(row.file)">
             <n-tag size="small" :type="extTagType(row.file.ext)" :bordered="false">
               {{ extLabel(row.file.ext) }}
             </n-tag>
@@ -561,7 +561,7 @@ const pagination = computed(() => ({
               {{ formatTime(row.file.purge_at) }} 清理
             </n-tag>
             <span class="file-card__spacer" />
-            <n-button size="small" quaternary @click="actions.openPreview(row.file)">
+            <n-button size="small" quaternary @click="actions.onOpenPreview(row.file)">
               <template #icon>
                 <n-icon><eye-outline /></n-icon>
               </template>

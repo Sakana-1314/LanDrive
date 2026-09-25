@@ -1,27 +1,20 @@
 <script setup lang="ts">
-// 预览页：按后端 /preview 给出的 kind 选择渲染方式。
+// 预览面：按后端 /preview 给出的 kind 选择渲染方式。
+//
+// 这里**不再有顶部栏**（文件名、类型/大小、下载按钮都按要求删掉了）。
+// 本页被两种方式使用：
+//   - 嵌在列表页的预览弹层里（`?embed=1`）：整页铺满 iframe，不渲染任何自身 chrome；
+//   - 直接访问 `/preview/:id`（旧链接/收藏）：留一个最小的返回入口，避免用户困住。
 //
 // 图片 / PDF / 音视频走浏览器原生能力（blob URL），
 // docx / xlsx / pptx 用动态导入的纯前端库，旧版 Office 格式提示下载。
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import {
-  NButton,
-  NCard,
-  NEmpty,
-  NIcon,
-  NResult,
-  NSpace,
-  NSpin,
-  NTag,
-  NText,
-  useMessage
-} from 'naive-ui'
-import { ArrowBackOutline, DownloadOutline } from '@vicons/ionicons5'
+import { NButton, NEmpty, NIcon, NResult, NSpace, NSpin, NText, useMessage } from 'naive-ui'
+import { ArrowBackOutline } from '@vicons/ionicons5'
 import { downloadFile, errMsg, fetchFileBlob, getPreviewInfo } from '@/api'
 import type { PreviewInfo } from '@/api/types'
-import { extLabel, formatBytes } from '@/utils/format'
-import { extTagType } from '@/utils/theme'
+import { closePreview } from '@/stores/preview'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,6 +29,14 @@ const loadError = ref('')
 const slowHint = ref(false)
 
 const id = computed(() => Number(route.params.id))
+
+/**
+ * 是否被弹层嵌入。
+ *
+ * 嵌入时不渲染返回键（外层已有悬浮关闭键），页面也必须铺满，
+ * 否则 iframe 里会露出一圈自身背景色，看着像预览面没对齐。
+ */
+const embedded = computed(() => route.query.embed === '1')
 
 async function load() {
   loading.value = true
@@ -69,6 +70,7 @@ function revoke() {
   }
 }
 
+/** 不支持预览时不去下载内容，但用户可以主动要原件。 */
 async function onDownload() {
   if (!info.value) return
   try {
@@ -78,14 +80,26 @@ async function onDownload() {
   }
 }
 
+/** 返回上一页；没有历史时回文件列表。 */
 function goBack() {
   if (window.history.length > 1) router.back()
   else router.push('/files')
 }
 
+/**
+ * Esc 关闭：嵌在弹层里时直接关弹层（同源，可与外层共用 store）；
+ * 独立访问时退回文件列表。
+ */
+function onKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (embedded.value) closePreview()
+  else goBack()
+}
+
 let slowTimer: number | undefined
 
 onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
   slowTimer = window.setTimeout(() => (slowHint.value = true), 8000)
   void load().finally(() => {
     if (slowTimer) window.clearTimeout(slowTimer)
@@ -94,6 +108,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
   if (slowTimer) window.clearTimeout(slowTimer)
   revoke()
 })
@@ -107,29 +122,15 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
 </script>
 
 <template>
-  <div class="preview-page">
-    <n-card class="card-surface preview-bar" :bordered="false">
-      <div class="bar-left">
-        <n-button quaternary circle aria-label="返回" @click="goBack">
-          <template #icon>
-            <n-icon><arrow-back-outline /></n-icon>
-          </template>
-        </n-button>
-        <span class="bar-name" :title="info?.name">{{ info?.name || '文件预览' }}</span>
-        <n-tag v-if="info" size="small" :type="extTagType(info.ext)" :bordered="false">
-          {{ extLabel(info.ext) }}
-        </n-tag>
-        <n-tag v-if="info" size="small" :bordered="false">{{ formatBytes(info.size_bytes) }}</n-tag>
-      </div>
-      <n-button size="small" type="primary" @click="onDownload">
-        <template #icon>
-          <n-icon><download-outline /></n-icon>
-        </template>
-        下载
-      </n-button>
-    </n-card>
+  <div class="preview-page" :class="{ 'preview-page--embedded': embedded }">
+    <!-- 独立访问时的返回入口：嵌入态由外层弹层的悬浮键负责，这里不再重复。 -->
+    <n-button v-if="!embedded" class="preview-back" quaternary circle aria-label="返回" @click="goBack">
+      <template #icon>
+        <n-icon><arrow-back-outline /></n-icon>
+      </template>
+    </n-button>
 
-    <n-spin v-if="loading" size="large" style="display: block; text-align: center; padding: 80px 0">
+    <n-spin v-if="loading" size="large" class="preview-state">
       <template #description>
         <n-space vertical align="center">
           <n-text>正在加载文件内容…</n-text>
@@ -138,7 +139,13 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
       </template>
     </n-spin>
 
-    <n-result v-else-if="loadError" status="error" title="无法预览" :description="loadError">
+    <n-result
+      v-else-if="loadError"
+      class="preview-state"
+      status="error"
+      title="无法预览"
+      :description="loadError"
+    >
       <template #footer>
         <n-space justify="center">
           <n-button @click="load">重试</n-button>
@@ -147,13 +154,16 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
       </template>
     </n-result>
 
-    <n-card v-else-if="info && (info.kind === 'unsupported' || info.kind === 'legacy-office')" class="card-surface" :bordered="false">
+    <div
+      v-else-if="info && (info.kind === 'unsupported' || info.kind === 'legacy-office')"
+      class="preview-state"
+    >
       <n-empty :description="info.note || '该格式不支持在线预览'" style="padding: 40px 0">
         <template #extra>
           <n-button type="primary" @click="onDownload">下载文件</n-button>
         </template>
       </n-empty>
-    </n-card>
+    </div>
 
     <template v-else-if="info && blob">
       <!-- Word -->
@@ -190,80 +200,106 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
       <TextPreview v-else-if="info.kind === 'text'" :blob="blob" :name="info.name" />
     </template>
 
-    <n-empty v-else description="没有可预览的内容" style="padding: 60px 0" />
+    <n-empty v-else class="preview-state" description="没有可预览的内容" style="padding: 60px 0" />
   </div>
 </template>
 
 <style scoped>
-.preview-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.bar-left {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.bar-name {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--color-text-strong);
-  font-size: 15px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 移动端：文件名独占一行，操作键降级到下一行 */
-@media (max-width: 768px) {
-  .preview-bar {
-    flex-wrap: wrap;
-  }
-
-  .bar-left {
-    flex: 1 1 100%;
-  }
-}
-
 .preview-page {
-  height: 100vh;
+  position: relative;
+  display: grid;
+  /* 单行铺满：预览面是「占满视口的一块」，不给子项留 auto 行
+     （auto 行只按内容高度撑开，100% 高度在子项里会解析不出来，
+     docx/pptx 这类自带滚动区的预览就滚不动了）。 */
+  grid-template-rows: minmax(0, 1fr);
+  height: 100dvh;
   padding: 12px;
   box-sizing: border-box;
   overflow: auto;
-  background: #f5f7fa;
+  background: var(--page-glow), var(--color-bg);
 }
+
+/* 嵌入弹层时铺满：iframe 内不留内边距与背景光晕，否则四周会露出一圈异色边。 */
+.preview-page--embedded {
+  padding: 0;
+  background: var(--color-preview-stage);
+}
+
+/* 弹层的悬浮关闭键压在本页右上角，因此嵌入态要给右上角留出安全区：
+   否则会盖住预览内容自己的右上角控件 —— 文本预览的「复制全部」就正好在
+   那个位置，被盖住后点不动（截图里发现的）。 */
+.preview-page--embedded .text-wrap {
+  padding-right: 44px;
+}
+
+/* 独立访问时的返回键：悬浮在左上角，不给预览面加整条标题栏。 */
+.preview-back {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  background: var(--color-surface-translucent);
+  box-shadow: var(--shadow-card);
+}
+
+/* 加载/错误/空态统一居中：这些是整页状态，不该缩在顶上。 */
+.preview-state {
+  align-self: center;
+  justify-self: center;
+  width: 100%;
+  padding: 40px 16px;
+  text-align: center;
+}
+
 .frame {
   width: 100%;
-  height: calc(100vh - 130px);
+  height: 100%;
+  min-height: 0;
   border: none;
   border-radius: var(--radius-card);
-  background: #fff;
+  background: var(--color-preview-paper);
 }
+
+/* 嵌入态没有外边距可留：PDF 直接铺满 iframe。 */
+.preview-page--embedded .frame {
+  height: 100dvh;
+  border-radius: 0;
+}
+
 .image-wrap {
+  display: grid;
+  place-items: center;
   text-align: center;
-  background: #fff;
+  background: var(--color-preview-stage);
   border-radius: var(--radius-card);
   padding: 12px;
 }
+
+.preview-page--embedded .image-wrap {
+  border-radius: 0;
+  padding: 0;
+}
+
 .image {
   max-width: 100%;
-  max-height: calc(100vh - 150px);
+  max-height: 100%;
   border-radius: var(--radius-control);
 }
+
 .media-wrap {
-  background: #000;
+  background: var(--color-preview-slide-backdrop);
   border-radius: var(--radius-card);
   padding: 12px;
   text-align: center;
 }
+
+.preview-page--embedded .media-wrap {
+  border-radius: 0;
+  padding: 0;
+}
+
 .video {
   max-width: 100%;
-  max-height: calc(100vh - 170px);
+  max-height: 100%;
 }
 </style>
