@@ -18,8 +18,17 @@ web/.env.local
 web/.env.*.local
 web/.env.production
 web/.env.development.local
+web/.env.staging
+web/.env.production.local
 .env
 .env.local
+# 根目录下的其它环境变量变体（staging / development / test 等）同样可能含真实地址
+/.env.*
+!/.env.example
+
+# 本地私有目录：凭据、部署备份、私人笔记等一律放这里，不要放在仓库其它位置
+# （该目录整体不提交；需要留档的本机私有文件都归到它下面）
+/.private/
 
 # 运行数据（文件存储根目录）
 /data/

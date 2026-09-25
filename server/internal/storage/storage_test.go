@@ -108,7 +108,7 @@ func TestFolderDirRel(t *testing.T) {
 }
 
 func TestUserDirName(t *testing.T) {
-	ok := []string{"1001", "admin", "user_01", "A-9", "a.b", "60017212"}
+	ok := []string{"1001", "admin", "user_01", "A-9", "a.b", "20001234"}
 	for _, in := range ok {
 		if _, err := UserDirName(in); err != nil {
 			t.Fatalf("UserDirName(%q) 应通过: %v", in, err)
