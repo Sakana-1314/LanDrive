@@ -7,12 +7,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NAlert, NButton, NForm, NIcon, NInput, useMessage } from 'naive-ui'
-import {
-  CloudOutline,
-  LockClosedOutline,
-  PersonOutline,
-  RefreshOutline
-} from '@vicons/ionicons5'
+import { LockClosedOutline, PersonOutline, RefreshOutline } from '@vicons/ionicons5'
 import {
   apiEndpointInfo,
   errMsg,
@@ -97,8 +92,8 @@ onMounted(() => {
   <div class="login-page">
     <div class="login-card">
       <div class="brand-block">
-        <div class="brand-mark" aria-hidden="true">
-          <n-icon :size="26"><cloud-outline /></n-icon>
+        <div class="brand-mark">
+          <img src="/logo.png" alt="局域网文件助手" width="54" height="54" />
         </div>
         <h1 class="brand-name">局域网文件助手</h1>
       </div>
@@ -178,14 +173,19 @@ onMounted(() => {
   justify-items: center;
 }
 
+/* 新 Logo 的圆角已直接做进图片像素（透明圆角），此处只负责尺寸，
+   不要再加 border-radius —— 那是给图片又套一层遮罩，会切出双圆角。 */
 .brand-mark {
   display: grid;
   width: 54px;
   height: 54px;
   place-items: center;
-  border-radius: 16px;
-  color: #fff;
-  background: var(--gradient-brand);
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .brand-name {
