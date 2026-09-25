@@ -33,6 +33,7 @@ import {
 import {
   CheckmarkOutline,
   DocumentTextOutline,
+  EllipsisHorizontalOutline,
   FolderOpenOutline,
   HardwareChipOutline,
   LinkOutline,
@@ -41,8 +42,6 @@ import {
   MoonOutline,
   PersonCircleOutline,
   PersonOutline,
-  Pin,
-  PinOutline,
   ServerOutline,
   SpeedometerOutline,
   SunnyOutline
@@ -90,35 +89,84 @@ function closeDrawerOnMobile() {
 }
 
 /**
- * 图钉按钮：点一下切换置顶。
- * stopPropagation 必须加 —— 否则点击会同时被 n-menu 当成"选中该项"而触发导航。
+ * 用户子 tab 右侧的「更多」菜单。
+ *
+ * 为什么从图钉图标改成下拉菜单：图钉是个只能表达一件事的按钮，
+ * 而且点下去到底是"置顶"还是"取消置顶"只能靠悬停提示区分，
+ * 触屏上根本没有提示。收进菜单后「置顶」成了一个**勾选状态项**，
+ * 当前是否已置顶一眼可见。
  */
-const PinToggle = defineComponent({
+const OwnerMenu = defineComponent({
   props: { owner: { type: Object as PropType<OwnerAggregate>, required: true } },
   setup(props) {
+    const options = computed<MenuOption[]>(() => [
+      {
+        key: 'pin',
+        // 勾选态必须画在 label 里：n-dropdown 不渲染 `extra`
+        // （那是 n-menu 的字段），写在 extra 上会静默丢失。
+        label: () =>
+          h(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '16px',
+                minWidth: '76px'
+              }
+            },
+            [
+              h('span', '置顶'),
+              props.owner.pinned
+                ? h(NIcon, { color: 'var(--color-primary)' }, { default: () => h(CheckmarkOutline) })
+                : null
+            ]
+          )
+      }
+    ])
+
+    function onSelect(key: string) {
+      if (key === 'pin') void togglePin(props.owner.user_id)
+    }
+
     return () =>
       h(
-        NIcon,
+        NDropdown,
         {
-          size: 15,
-          // 行内样式而非 scoped class：该节点由渲染函数产出，
-          // n-menu 的 extra 区域不受 scoped 属性覆盖（同一文件既有的做法）。
-          style: {
-            color: props.owner.pinned ? 'var(--color-primary)' : 'var(--color-text-muted)',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            // 触控目标偏小，补一点内边距，移动端也好点
-            padding: '2px',
-            borderRadius: '4px'
-          },
-          title: props.owner.pinned ? '取消置顶' : '置顶',
-          onClick: (e: MouseEvent) => {
-            e.stopPropagation()
-            e.preventDefault()
-            togglePin(props.owner.user_id)
-          }
+          options: options.value,
+          trigger: 'click',
+          placement: 'bottom-end',
+          onSelect
         },
-        { default: () => h(props.owner.pinned ? Pin : PinOutline) }
+        {
+          default: () =>
+            h(
+              NIcon,
+              {
+                size: 15,
+                // 行内样式而非 scoped class：该节点由渲染函数产出，
+                // n-menu 的 extra 区域不受 scoped 属性覆盖（同一文件既有的做法）。
+                style: {
+                  // 已置顶时点亮触发键：否则置顶状态只能在菜单展开后才看得到
+                  color: props.owner.pinned ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  // 触控目标偏小，补一点内边距，移动端也好点
+                  padding: '2px',
+                  borderRadius: '4px'
+                },
+                title: '更多',
+                // 拦掉冒泡，否则点它会被 n-menu 当成"选中该项"而触发导航
+                // （下拉自己的 click 监听挂在触发键上，不受冒泡被拦的影响）。
+                onClick: (e: MouseEvent) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                }
+              },
+              { default: () => h(EllipsisHorizontalOutline) }
+            )
+        }
       )
   }
 })
@@ -133,14 +181,15 @@ const PinToggle = defineComponent({
 const menuOptions = computed<MenuOption[]>(() => {
   const withFiles = ownersState.items.filter((o) => o.file_count > 0)
   const children: MenuOption[] = withFiles.map((o) => ({
-    // label 里直接带文件数：省掉一行说明，也让"谁的文件多"一眼可见
+    // 只显示姓名：侧栏是导航，不是数据看板 —— 带上文件数会让每行变长、
+    // 姓名被挤窄，而"谁的文件多"对"点进去找文件"这件事没有帮助。
     label: () =>
       h(RouterLink, { to: `/files?owner=${o.user_id}` }, {
-        default: () => `${o.name} · ${o.file_count}`
+        default: () => o.name
       }),
     key: `/files?owner=${o.user_id}`,
-    // 图钉即置顶开关：功能显而易见，不需要额外文案
-    extra: () => h(PinToggle, { owner: o })
+    // 「更多」下拉里勾选置顶
+    extra: () => h(OwnerMenu, { owner: o })
   }))
 
   const allFilesLink = () =>

@@ -226,6 +226,15 @@ jobs:
           REQUIRE_PLAYWRIGHT: "1"
         run: npm run test:preview
 
+      # 侧栏用户子 tab 只显示姓名（不带文件数）；置顶收进「⋯」下拉并显示勾选态。
+      # 勾选态这里踩过坑：extra 是 n-menu 专有字段，n-dropdown 不读它 ——
+      # 写在 extra 上的对勾会静默丢失（不报错、类型也过），只有真浏览器能发现。
+      - name: 侧栏检查（子 tab 不带文件数、下拉勾选置顶）
+        working-directory: web
+        env:
+          REQUIRE_PLAYWRIGHT: "1"
+        run: npm run test:sidebar
+
       - name: 校验构建产物
         working-directory: web
         run: |
