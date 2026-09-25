@@ -191,6 +191,14 @@ jobs:
           REQUIRE_PLAYWRIGHT: "1"
         run: npm run test:responsive
 
+      # 拖入文件夹必须递归展开目录、按层级建目录、把文件放进各自目录。
+      # 只能靠真实浏览器（DragEvent + FileSystemEntry），纯函数单测覆盖不到这条链路。
+      - name: 上传文件夹检查（拖入目录后层级正确）
+        working-directory: web
+        env:
+          REQUIRE_PLAYWRIGHT: "1"
+        run: npm run test:folder-upload
+
       - name: 校验构建产物
         working-directory: web
         run: |

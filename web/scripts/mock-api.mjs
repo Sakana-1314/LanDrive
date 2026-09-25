@@ -58,6 +58,15 @@ const json = (res, data, status = 200) => {
   res.end(JSON.stringify(data))
 }
 
+/** 读请求体（POST/PUT 用）。 */
+const readBody = (req) =>
+  new Promise((resolve) => {
+    let buf = ''
+    req.on('data', (c) => (buf += c))
+    req.on('end', () => resolve(buf))
+    req.on('error', () => resolve(''))
+  })
+
 // 文件夹与分享的 mock 数据。刻意包含：空目录（file_count=0，不应被当成已删除）、
 // 已过期、目标已删除三种分享状态，让响应式检查覆盖到这些分支的布局。
 const FOLDERS = [
@@ -130,8 +139,32 @@ http
       res.writeHead(204)
       return res.end()
     }
-    // 文件夹：目录导航与面包屑
+    // 文件夹：目录导航与面包屑；POST 支持建目录（拖入文件夹时前端会逐级创建）
     if (p === '/api/folders') {
+      if (req.method === 'POST') {
+        return readBody(req).then((body) => {
+          let payload = {}
+          try { payload = JSON.parse(body || '{}') } catch { /* 保持空 */ }
+          const name = String(payload.name || '').trim()
+          const parentId = Number(payload.parent_id || 0) || null
+          if (!name) return json(res, { error: '文件夹名不合法' }, 400)
+          // 同层同名 → 409（与真实后端一致，前端据此复用已存在的目录）
+          const dup = FOLDERS.find((f) => f.name === name && (f.parent_id || null) === parentId)
+          if (dup) return json(res, { error: '该位置已存在同名文件夹' }, 409)
+          const parent = parentId ? FOLDERS.find((f) => f.id === parentId) : null
+          const path = parent ? `${parent.path}/${name}` : name
+          const f = {
+            id: Math.max(0, ...FOLDERS.map((x) => x.id)) + 1,
+            owner_id: 1, parent_id: parentId, name, path, status: 'active',
+            owner_name: '管理员', owner_employee_no: 'admin',
+            file_count: 0, used_bytes: 0, sub_folder_count: 0,
+            created_at: new Date().toISOString(), updated_at: new Date().toISOString()
+          }
+          FOLDERS.push(f)
+          if (parent) parent.sub_folder_count += 1
+          return json(res, f, 201)
+        })
+      }
       const folderId = Number(url.searchParams.get('folder_id') || 0)
       const folders = FOLDERS.filter((f) => (folderId ? f.parent_id === folderId : f.parent_id === null))
       const current = folderId ? FOLDERS.find((f) => f.id === folderId) || null : null
