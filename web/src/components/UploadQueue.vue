@@ -75,6 +75,14 @@ function previewFile(t: UploadTask) {
     window.open(router.resolve({ name: 'preview', params: { id: t.result.id } }).href, '_blank')
   }
 }
+
+/**
+ * 队列里显示「相对目录/文件名」：拖入文件夹时同一批会有很多同名文件
+ * （如多个 1.xlsx），只显示文件名根本分不清是哪一个。
+ */
+function displayName(t: UploadTask): string {
+  return t.dirs.length ? `${t.dirs.join('/')}/${t.file.name}` : t.file.name
+}
 </script>
 
 <template>
@@ -94,7 +102,7 @@ function previewFile(t: UploadTask) {
     <ul class="task-list">
       <li v-for="t in tasks" :key="t.id" class="task">
         <div class="task__head">
-          <span class="task__name" :title="t.file.name">{{ t.file.name }}</span>
+          <span class="task__name" :title="displayName(t)">{{ t.file.name }}</span>
           <n-tag size="small" :type="stateType(t)" :bordered="false">{{ stateLabel(t) }}</n-tag>
           <span class="task__spacer" />
           <span class="task__size">{{ formatBytes(t.loaded) }} / {{ formatBytes(t.total) }}</span>

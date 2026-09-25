@@ -92,6 +92,17 @@
   - **回归测试**：`npm run test:responsive`（真实浏览器 × 5 视口查横向溢出，
     自带 mock 后端与 dev server）。CI 设 `REQUIRE_PLAYWRIGHT=1`，未装浏览器时**失败而非跳过**
     —— 否则会出现"什么都没检查却报绿"的假通过（已发生三次）。
+    **判断"元素是否被裁剪"不能只看有没有滚动祖先**：`n-scrollbar-container` 是
+    `overflowX:scroll`，旧逻辑一见它就跳过，于是被 `overflow:hidden` 祖先**裁掉**的元素
+    （390px 下工具条第三个按钮只剩一半）能一路报绿。现在的口径是先遇到的
+    `auto/scroll` → 可滚动（跳过）；先遇到的 `hidden/clip` 且超出其右边界 → 真的被裁（报错）。
+  - **上传文件夹**：拖入文件夹时 `dataTransfer.files` 里**只有那个文件夹本身**
+    （一个 0 字节 File），只读 `files` 就会「只上传一个与文件夹同名的空文件」。
+    目录内容必须经 `webkitGetAsEntry()` 递归读出（`<input webkitdirectory>` 则读
+    `webkitRelativePath`），再按相对层级在服务端逐级建目录（同名复用）后分别入队。
+    展平逻辑集中在 `src/utils/uploadEntries.ts`；每个任务的 `folderId` 必须**自带**
+    （同一批文件分属不同层级，不能用共享字段）。由 `uploadEntries.spec.ts` 与
+    `npm run test:folder-upload`（真实浏览器，含建目录/落点断言）共同守卫。
 
 ## 6. 部署编排（docker-compose.yml）
 

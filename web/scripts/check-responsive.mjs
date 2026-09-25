@@ -230,30 +230,43 @@ for (const vp of VIEWPORTS) {
 
     // 逐个元素比对右边界：n-scrollbar / data-table 这类自带横向滚动的容器内部
     // 允许比视口宽，因此只看"不在滚动容器内"的元素。
+    //
+    // 但只判"有没有滚动祖先"会漏掉一种真实缺陷：元素被 overflow:hidden 的祖先
+    // **裁掉**（内容宽出容器、又不给滚动条），右边的按钮/文字直接看不见。
+    // 实测案例：工具条加了第三个按钮后，390px 下「新建文件夹」被裁掉一半，
+    // 而 n-scrollbar-container 恰好是 overflowX:scroll 的祖先，旧逻辑直接跳过了。
+    // 因此这里要区分：先遇到 auto/scroll → 可滚动，跳过；
+    // 先遇到 hidden/clip 且自己超出它 → 真的被裁，报出来。
     const bleeding = await page.evaluate(() => {
       const out = []
       for (const el of document.querySelectorAll('body *')) {
         const r = el.getBoundingClientRect()
         if (r.width === 0 || r.right <= window.innerWidth + 2) continue
-        // 跳过自带横向滚动的祖先
         let p = el.parentElement
-        let scrollable = false
+        let verdict = 'none' // none=没找到 overflow 祖先
         while (p) {
           const cs = getComputedStyle(p)
-          if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') {
-            scrollable = true
+          const ox = cs.overflowX
+          if (ox === 'auto' || ox === 'scroll') {
+            verdict = 'scrollable'
+            break
+          }
+          if (ox === 'hidden' || ox === 'clip') {
+            // 超出这个「裁剪祖先」的右边界就是真的看不见
+            if (r.right > p.getBoundingClientRect().right + 1) verdict = 'clipped'
             break
           }
           p = p.parentElement
         }
-        if (scrollable) continue
-        out.push(`${el.tagName.toLowerCase()}.${String(el.className || '').split(' ')[0]}`)
+        if (verdict === 'clipped') {
+          out.push(`${el.tagName.toLowerCase()}.${String(el.className || '').split(' ')[0]}`)
+        }
       }
       return [...new Set(out)].slice(0, 4)
     })
     if (bleeding.length) {
       failures++
-      problems.push(`${vp.name} ${path}: 元素超出视口 → ${bleeding.join(', ')}`)
+      problems.push(`${vp.name} ${path}: 元素被裁剪祖先裁掉 → ${bleeding.join(', ')}`)
     }
   }
   await ctx.close()

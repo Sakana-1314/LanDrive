@@ -10,6 +10,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NIcon } from 'naive-ui'
 import { CloudUploadOutline } from '@vicons/ionicons5'
+import { entriesFromDataTransfer, type UploadEntry } from '@/utils/uploadEntries'
 
 const props = withDefaults(
   defineProps<{
@@ -19,7 +20,7 @@ const props = withDefaults(
   { disabled: false }
 )
 
-const emit = defineEmits<{ (e: 'files', files: File[]): void }>()
+const emit = defineEmits<{ (e: 'files', entries: UploadEntry[]): void }>()
 
 /** 嵌套元素间移动会连续触发 dragenter/dragleave，用计数抵消抖动。 */
 let depth = 0
@@ -53,12 +54,17 @@ function onDragLeave(e: DragEvent) {
   if (depth === 0 || e.clientX <= 0 || e.clientY <= 0) reset()
 }
 
-function onDrop(e: DragEvent) {
+async function onDrop(e: DragEvent) {
   if (!active.value) return
   e.preventDefault()
-  const files = Array.from(e.dataTransfer?.files || [])
+  const dt = e.dataTransfer
   reset()
-  if (files.length) emit('files', files)
+  if (!dt) return
+  // 必须走 entriesFromDataTransfer：拖入文件夹时 dataTransfer.files 里
+  // 只有文件夹本身（一个 0 字节条目），只读 files 就会"上传一个同名空文件"。
+  // 目录内容要经 webkitGetAsEntry 递归读取（是异步的，因此这里 await）。
+  const entries = await entriesFromDataTransfer(dt)
+  if (entries.length) emit('files', entries)
 }
 
 function reset() {

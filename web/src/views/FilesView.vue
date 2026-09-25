@@ -43,6 +43,7 @@ import PageDropZone from '@/components/PageDropZone.vue'
 import UploadQueue from '@/components/UploadQueue.vue'
 import { useCreateShare } from '@/composables/useCreateShare'
 import { useUploadQueue } from '@/composables/useUploadQueue'
+import { entriesFromFileList, type UploadEntry } from '@/utils/uploadEntries'
 import { formatBytes } from '@/utils/format'
 import { loadOwners, ownersState } from '@/stores/owners'
 
@@ -253,6 +254,7 @@ const {
   uploadDisabled,
   prepare: prepareUpload,
   addFiles: addUploadFiles,
+  addEntries: addUploadEntries,
   cancel: cancelUpload,
   retry: retryUpload,
   remove: removeUpload,
@@ -264,11 +266,12 @@ const {
 
 /**
  * 整页拖放的落点逻辑。
- * 目标目录由 addFiles 在**入队那一刻**同步（松手即入队），
+ * 目标目录由 addEntries 在**入队那一刻**同步（松手即入队），
  * 因此用户随后切换目录也不会把这次拖入的文件传错地方。
+ * 参数是展平后的条目（含相对目录），不是裸 File 列表 —— 拖入的文件夹要保留层级。
  */
-function onDropFiles(files: File[]) {
-  addUploadFiles(files)
+function onDropFiles(entries: UploadEntry[]) {
+  void addUploadEntries(entries)
 }
 
 // 「全部文件」等非本人目录不开放上传（后端只允许传到自己目录）
@@ -276,6 +279,8 @@ const dropEnabled = computed(() => scope.value === 'mine')
 
 /** 隐藏的原生文件输入：点工具条按钮时由它弹出系统选择框。 */
 const filePicker = ref<HTMLInputElement | null>(null)
+/** 选择文件夹的输入（带 webkitdirectory，移动端选目录的入口）。 */
+const dirPicker = ref<HTMLInputElement | null>(null)
 
 /** 选完文件即入队；清空 value，否则连续选同一个文件不会触发 change。 */
 function onPickFiles(e: Event) {
@@ -283,6 +288,17 @@ function onPickFiles(e: Event) {
   const files = Array.from(el.files || [])
   el.value = ''
   if (files.length) addUploadFiles(files)
+}
+
+/**
+ * 选择文件夹：每个 File 带 webkitRelativePath（如 `报表/2026/1.xlsx`），
+ * 据此还原目录层级后入队（与拖入文件夹走同一条路径）。
+ */
+function onPickDir(e: Event) {
+  const el = e.target as HTMLInputElement
+  const entries = entriesFromFileList(el.files || [])
+  el.value = ''
+  if (entries.length) void addUploadEntries(entries)
 }
 
 // 切换人员或目录时重置分页与关键字。
@@ -328,11 +344,23 @@ onMounted(() => {
             </button>
           </template>
         </div>
-        <!-- 上传入口：拖拽之外留一个按钮（移动端没有拖拽操作） -->
+        <!-- 上传入口：拖拽之外留按钮（移动端没有拖拽操作，且能整个文件夹一起传） -->
         <div v-if="scope === 'mine'" class="folder-bar__tools">
-          <n-button type="primary" :disabled="uploadDisabled" @click="filePicker?.click()">
+          <n-button
+            type="primary"
+            :disabled="uploadDisabled"
+            @click="filePicker?.click()"
+          >
             <template #icon><n-icon><cloud-upload-outline /></n-icon></template>
             上传文件
+          </n-button>
+          <n-button
+            secondary
+            :disabled="uploadDisabled"
+            @click="dirPicker?.click()"
+          >
+            <template #icon><n-icon><folder-open-outline /></n-icon></template>
+            上传文件夹
           </n-button>
           <n-button secondary @click="openCreateFolder">
             <template #icon><n-icon><create-outline /></n-icon></template>
@@ -451,6 +479,24 @@ onMounted(() => {
       @change="onPickFiles"
     />
 
+    <!--
+      选择整个文件夹：webkitdirectory 让系统选择框只列目录，选中的每个文件
+      都带 webkitRelativePath（如 报表/2026/1.xlsx），据此还原层级后再上传。
+      没有拖拽能力的移动端也能用它传整个目录。
+    -->
+    <input
+      v-if="scope === 'mine'"
+      ref="dirPicker"
+      class="file-picker"
+      type="file"
+      webkitdirectory
+      directory
+      multiple
+      tabindex="-1"
+      aria-hidden="true"
+      @change="onPickDir"
+    />
+
     <!-- 整页拖放：拖到「我的文件」任意位置松手即上传 -->
     <PageDropZone
       v-if="dropEnabled"
@@ -489,8 +535,12 @@ onMounted(() => {
 /* 工具条右侧：上传与新建文件夹并排，窄屏一起换行 */
 .folder-bar__tools {
   display: flex;
-  flex: none;
+  /* 不能 flex:none —— 三个按钮共 368px，窄屏会顶出卡片被裁掉（390px 下「新建文件夹」
+     只剩一半）。允许收缩并换行，窄屏时按钮折到下一行。 */
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
 }
 
 /* 提示条与文件列表之间的间距，避免文字贴住目录卡片 */

@@ -38,6 +38,15 @@ export interface UploadTask {
   resumed: boolean
   startedAt: number
   canceled: boolean
+  /**
+   * 目标文件夹 id（0 = 用户根目录）。
+   *
+   * 每个任务自带而不是读 manager 的当前值：拖入整个文件夹时会先建出多级
+   * 子目录，同一批文件可能落在不同层级 —— 用共享字段会被后一个覆盖。
+   */
+  folderId: number
+  /** 该文件的相对目录层级（用于队列里显示来源，如 `报表/2026`）。 */
+  dirs: string[]
 }
 
 const STORE_PREFIX = 'lanfs-upload:'
@@ -163,7 +172,7 @@ export class UploadManager {
   }
 
   /** 添加上传任务并立即开始。返回任务对象。 */
-  add(file: File): UploadTask {
+  add(file: File, folderId?: number, dirs: string[] = []): UploadTask {
     const task: UploadTask = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       file,
@@ -180,7 +189,10 @@ export class UploadManager {
       result: null,
       resumed: false,
       startedAt: Date.now(),
-      canceled: false
+      canceled: false,
+      // 未显式给目标目录时用当前所在目录（拖入单个文件的情形）。
+      folderId: folderId ?? this.folderId,
+      dirs
     }
     this.tasks.unshift(task)
     void this.run(task)
@@ -210,7 +222,8 @@ export class UploadManager {
   private async run(task: UploadTask): Promise<void> {
     // 续传记录按"工号 + 文件 + 目标目录"区分：同一个文件传到不同目录是两次
     // 不同的上传，共用一个会话会让后一份落到前一个目录里。
-    const key = `${storeKey(this.employeeNo, task.file)}:f${this.folderId}`
+    // 用任务自带的 folderId（不是 manager 当前值）：一批拖入的文件可能分属不同层级。
+    const key = `${storeKey(this.employeeNo, task.file)}:f${task.folderId}`
     try {
       task.state = 'hashing'
       this.notify(task)
@@ -241,7 +254,7 @@ export class UploadManager {
       }
 
       if (!session) {
-        session = await initUpload(task.file.name, task.file.size, sha, this.folderId)
+        session = await initUpload(task.file.name, task.file.size, sha, task.folderId)
       }
 
       task.uploadId = session.upload_id
