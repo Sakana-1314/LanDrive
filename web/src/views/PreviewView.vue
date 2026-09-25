@@ -166,38 +166,40 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
     </div>
 
     <template v-else-if="info && blob">
-      <!-- Word -->
-      <DocxPreview v-if="info.kind === 'docx'" :blob="blob" />
+      <!--
+        统一骨架：**一个舞台 + 一张内容卡**。
+        此前每个预览器各自决定舞台底色、内边距、圆角与「谁来滚动」，
+        于是同一份文件在不同类型下观感割裂（docx 浅灰舞台、pptx 深灰舞台、
+        xlsx/text 全白、pdf 干脆没有舞台；滚动还分别挂在 wrap / 库内部 /
+        带 calc(100dvh - 魔数) 的子元素上）。
+        现在舞台与内边距由这里唯一提供，各预览只负责「内容面」本身。
+      -->
+      <div class="preview-stage">
+        <!-- Word / Excel / PowerPoint / 文本：都是「一面内容」，由各自组件渲染 -->
+        <DocxPreview v-if="info.kind === 'docx'" :blob="blob" />
+        <XlsxPreview v-else-if="info.kind === 'xlsx'" :blob="blob" />
+        <PptxPreview v-else-if="info.kind === 'pptx'" :blob="blob" />
+        <TextPreview v-else-if="info.kind === 'text'" :blob="blob" :name="info.name" />
 
-      <!-- Excel -->
-      <XlsxPreview v-else-if="info.kind === 'xlsx'" :blob="blob" />
+        <!-- PDF：浏览器原生查看器，自带白底与工具栏，不需要我们再包一层内容面 -->
+        <iframe
+          v-else-if="info.kind === 'pdf'"
+          :src="objectUrl"
+          class="frame"
+          title="PDF 预览"
+        />
 
-      <!-- PowerPoint -->
-      <PptxPreview v-else-if="info.kind === 'pptx'" :blob="blob" />
-
-      <!-- PDF -->
-      <iframe
-        v-else-if="info.kind === 'pdf'"
-        :src="objectUrl"
-        class="frame"
-        title="PDF 预览"
-      />
-
-      <!-- 图片 -->
-      <div v-else-if="info.kind === 'image'" class="image-wrap">
-        <img :src="objectUrl" :alt="info.name" class="image" />
+        <!-- 图片 / 音视频：内容居中，舞台色由 .preview-stage 统一给 -->
+        <div v-else-if="info.kind === 'image'" class="image-wrap">
+          <img :src="objectUrl" :alt="info.name" class="image" />
+        </div>
+        <div v-else-if="info.kind === 'video'" class="media-wrap">
+          <video :src="objectUrl" controls preload="metadata" class="video" />
+        </div>
+        <div v-else-if="info.kind === 'audio'" class="media-wrap">
+          <audio :src="objectUrl" controls preload="metadata" style="width: 100%" />
+        </div>
       </div>
-
-      <!-- 音视频 -->
-      <div v-else-if="info.kind === 'video'" class="media-wrap">
-        <video :src="objectUrl" controls preload="metadata" class="video" />
-      </div>
-      <div v-else-if="info.kind === 'audio'" class="media-wrap">
-        <audio :src="objectUrl" controls preload="metadata" style="width: 100%" />
-      </div>
-
-      <!-- 文本 -->
-      <TextPreview v-else-if="info.kind === 'text'" :blob="blob" :name="info.name" />
     </template>
 
     <n-empty v-else class="preview-state" description="没有可预览的内容" style="padding: 60px 0" />
@@ -225,13 +227,6 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
   background: var(--color-preview-stage);
 }
 
-/* 弹层的悬浮关闭键压在本页右上角，因此嵌入态要给右上角留出安全区：
-   否则会盖住预览内容自己的右上角控件 —— 文本预览的「复制全部」就正好在
-   那个位置，被盖住后点不动（截图里发现的）。 */
-.preview-page--embedded .text-wrap {
-  padding-right: 44px;
-}
-
 /* 独立访问时的返回键：悬浮在左上角，不给预览面加整条标题栏。 */
 .preview-back {
   position: absolute;
@@ -251,33 +246,46 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
   text-align: center;
 }
 
+/**
+ * 统一舞台：所有可渲染类型的唯一外层。
+ *
+ * 契约（改这里就等于改所有类型的观感，各预览器不要再自己写舞台）：
+ *   - 底色唯一：--color-preview-stage（明暗两档各一个值）；
+ *   - 内边距唯一：左右下 --preview-pad，顶部 --preview-gutter
+ *     （顶部更大是为了给悬浮的返回键/关闭键让位，否则它会盖住内容自己的
+ *     右上角控件 —— 文本预览的「复制全部」就被盖过）；
+ *   - 滚动归舞台：内容更高时在这里滚，各预览内部不再各写一套 calc(100dvh - 魔数)。
+ */
+.preview-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  padding: var(--preview-gutter) var(--preview-pad) var(--preview-pad);
+  overflow: auto;
+  background: var(--color-preview-stage);
+}
+
+/* 舞台里的每一样东西都占满这一格：预览器自己决定高度是否撑满。 */
+.preview-stage > * {
+  min-height: 0;
+}
+
+/* PDF：浏览器原生查看器自带白底与工具栏，直接铺满舞台即可，
+   不需要再包一层「内容卡」（包了反而在深色档下多出一圈浅色边框）。 */
 .frame {
   width: 100%;
   height: 100%;
   min-height: 0;
   border: none;
-  border-radius: var(--radius-card);
   background: var(--color-preview-paper);
-}
-
-/* 嵌入态没有外边距可留：PDF 直接铺满 iframe。 */
-.preview-page--embedded .frame {
-  height: 100dvh;
-  border-radius: 0;
 }
 
 .image-wrap {
   display: grid;
   place-items: center;
+  min-height: 0;
   text-align: center;
-  background: var(--color-preview-stage);
-  border-radius: var(--radius-card);
-  padding: 12px;
-}
-
-.preview-page--embedded .image-wrap {
-  border-radius: 0;
-  padding: 0;
 }
 
 .image {
@@ -287,15 +295,10 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
 }
 
 .media-wrap {
-  background: var(--color-preview-slide-backdrop);
-  border-radius: var(--radius-card);
-  padding: 12px;
+  display: grid;
+  place-items: center;
+  min-height: 0;
   text-align: center;
-}
-
-.preview-page--embedded .media-wrap {
-  border-radius: 0;
-  padding: 0;
 }
 
 .video {

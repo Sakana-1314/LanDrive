@@ -48,19 +48,31 @@ onBeforeUnmount(() => {
 <template>
   <div class="docx-wrap">
     <n-alert v-if="error" type="error" :title="error" style="margin-bottom: 10px" />
-    <n-spin v-if="loading" size="large" style="display: block; text-align: center; padding: 30px 0" />
+    <n-spin v-if="loading" size="large" class="docx-loading" />
     <div ref="host" class="docx-host" />
   </div>
 </template>
 
 <style scoped>
+/**
+ * 内容面契约（与 xlsx / pptx / text 一致）：组件只画内容本身。
+ * docx 比较特殊 —— 它的「内容」是一张张白纸，纸张之间的灰色间隙由
+ * **库自己的 wrapper** 提供；我们把那个 wrapper 设成透明，让 PreviewView
+ * 的统一舞台色透出来，这样 docx 的舞台与其它类型是同一个颜色。
+ */
 .docx-wrap {
+  min-height: 0;
   height: 100%;
-  padding: 12px;
   overflow: auto;
   border-radius: var(--radius-card);
-  /* 纸张外的舞台：深色档下不能用浅色（白纸是内容，舞台是 UI）。 */
-  background: var(--color-preview-stage);
+  /* 纸张本身就是内容，不需要再套一层内容面底色 */
+  background: transparent;
+}
+
+.docx-loading {
+  display: block;
+  margin: var(--space-lg) auto;
+  text-align: center;
 }
 
 /* docx-preview 的类名由 renderAsync 的 className 派生：
@@ -68,15 +80,15 @@ onBeforeUnmount(() => {
    此前这里写成 `.docx-wrapper`（默认 className 才是 docx），与实际的
    `docx-preview-root` 对不上，于是这段覆盖**从未生效**过。 */
 .docx-host :deep(.docx-preview-root-wrapper) {
-  padding: 12px;
-  /* 库内置的是 background: gray，深色档下必须用令牌盖掉。 */
+  /* 库内置的是 background: gray，深色档下必须盖掉，交给统一舞台 */
   background: transparent;
 }
 
 /* 纸张本身保持白色：这是文档内容，不跟随界面外观。 */
 .docx-host :deep(.docx-preview-root-wrapper > section.docx-preview-root) {
   background: var(--color-preview-paper);
-  box-shadow: 0 2px 12px rgb(0 0 0 / 18%);
-  margin-bottom: 16px;
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--space-md);
+  border-radius: 2px;
 }
 </style>

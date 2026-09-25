@@ -6,8 +6,25 @@
 //
 // 用法：node scripts/mock-api.mjs [port]   （默认 18081）
 import http from 'node:http'
+import fs from 'node:fs'
 
 const PORT = Number(process.argv[2] || 18081)
+
+/**
+ * 扩展名 → 仓库内样例文件。
+ *
+ * 为什么要有真实字节：预览一致性检查要断言「office 类型也共用同一个舞台」，
+ * 如果所有类型都回纯文本，xlsx/docx 根本走不到真正的渲染分支，
+ * 「所有类型观感一致」就等于什么都没验。
+ * 样例是提交进仓库的最小文件（docx/xlsx 各几 KB）。
+ */
+const FIXTURE_EXT = {
+  '.docx': 'preview-sample.docx',
+  '.xlsx': 'preview-sample.xlsx',
+  // 图片用 1x1 PNG 就够：检查只看舞台与几何，不看画面内容
+  '.png': 'preview-sample.png',
+  '.pdf': 'preview-sample.pdf'
+}
 
 const USERS = [
   { id: 1, employee_no: '1001', name: '张伟', role: 'admin', enabled: true, dir_rel: 'users/1', file_count: 4, used_bytes: 12345678, last_login_at: '2026-09-23T02:25:00Z', created_at: '2026-01-05T02:00:00Z' },
@@ -164,8 +181,15 @@ http
     }
     const contentMatch = p.match(/^\/api\/files\/(\d+)\/content$/)
     if (contentMatch) {
-      if (!FILES.some((x) => x.id === Number(contentMatch[1]))) {
-        return json(res, { error: '文件不存在' }, 404)
+      const f = FILES.find((x) => x.id === Number(contentMatch[1]))
+      if (!f) return json(res, { error: '文件不存在' }, 404)
+      // 按扩展名回真实字节：预览一致性检查要断言「office 类型也遵守统一舞台」，
+      // 若所有类型都回纯文本，xlsx/docx 走不到真正的渲染分支，检查就是假绿。
+      const fx = FIXTURE_EXT[f.ext.toLowerCase()]
+      if (fx) {
+        const buf = fs.readFileSync(new URL(`./fixtures/${fx}`, import.meta.url))
+        res.writeHead(200, { 'Content-Type': f.ext === '.png' ? 'image/png' : 'application/octet-stream' })
+        return res.end(buf)
       }
       // 文本内容：预览检查要能断言「iframe 内真的渲染出了文件内容」。
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })

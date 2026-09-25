@@ -49,8 +49,13 @@
   /* 文本预览的正文底色与描边（纯文本是 UI 呈现，不跟随文档样式）。 */
   --color-preview-code-bg: #fafbfc;
   --color-preview-code-border: #eceff4;
-  /* 幻灯片预览的背景：库自身在深色下也是最深的一块，两档给同一语义的两个值。 */
-  --color-preview-slide-backdrop: #3d4148;
+
+  /* 预览的统一骨架：所有类型共用同一个舞台内边距与「顶部留白」。
+     顶部留白明显大于左右下，是给悬浮的返回键/关闭键让位 ——
+     不留的话它会盖住内容自己的右上角控件（文本预览的「复制全部」就被盖过），
+     而且各类型留法不同时观感就不统一。 */
+  --preview-pad: 12px;
+  --preview-gutter: 40px;
 
   --radius-control: 9px;
   --radius-card: 14px;
@@ -118,7 +123,6 @@
   --color-preview-paper: #ffffff;
   --color-preview-code-bg: #171c24;
   --color-preview-code-border: #2a313b;
-  --color-preview-slide-backdrop: #2a2e35;
 
   --shadow-card: 0 8px 24px rgb(0 0 0 / 32%);
   --shadow-card-hover: 0 12px 30px rgb(0 0 0 / 42%);
