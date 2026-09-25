@@ -335,8 +335,8 @@ function confirmLogout() {
       @expand="collapsed = false"
     >
       <div class="brand" :class="{ compact: collapsed }">
-        <div class="brand-mark" aria-hidden="true">
-          <n-icon :size="18"><folder-open-outline /></n-icon>
+        <div class="brand-mark">
+          <img src="/logo.png" alt="局域网文件助手" width="32" height="32" />
         </div>
         <span v-if="!collapsed" class="brand-text">局域网文件助手</span>
       </div>
@@ -403,8 +403,8 @@ function confirmLogout() {
   <n-drawer v-model:show="drawerOpen" placement="left" :width="248">
     <n-drawer-content body-content-style="padding: 0">
       <div class="brand drawer-brand">
-        <div class="brand-mark" aria-hidden="true">
-          <n-icon :size="18"><folder-open-outline /></n-icon>
+        <div class="brand-mark">
+          <img src="/logo.png" alt="局域网文件助手" width="32" height="32" />
         </div>
         <span class="brand-text">局域网文件助手</span>
       </div>
@@ -440,15 +440,19 @@ function confirmLogout() {
   padding: 0;
 }
 
+/* 圆角已在 logo.png 的像素里切好，这里不要再叠 border-radius */
 .brand-mark {
   display: grid;
   flex: none;
   width: 32px;
   height: 32px;
   place-items: center;
-  border-radius: 10px;
-  color: #fff;
-  background: var(--gradient-brand);
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .brand-text {

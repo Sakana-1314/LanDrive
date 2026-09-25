@@ -93,8 +93,8 @@ onMounted(load)
   <div class="share-page">
     <div class="share-card">
       <div class="share-brand">
-        <div class="share-brand__mark" aria-hidden="true">
-          <n-icon :size="18"><folder-open-outline /></n-icon>
+        <div class="share-brand__mark">
+          <img src="/logo.png" alt="局域网文件助手" width="32" height="32" />
         </div>
         <span>局域网文件助手</span>
       </div>
@@ -214,14 +214,18 @@ onMounted(load)
   font-weight: 650;
 }
 
+/* 圆角已在 logo.png 的像素里切好，这里不要再叠 border-radius */
 .share-brand__mark {
   display: grid;
   width: 32px;
   height: 32px;
   place-items: center;
-  border-radius: 10px;
-  color: #fff;
-  background: var(--gradient-brand);
+}
+
+.share-brand__mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .share-center {
