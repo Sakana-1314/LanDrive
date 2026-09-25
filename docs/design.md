@@ -471,7 +471,7 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | `/files/mine` | 我的文件 | 仅自己的文件，可改名 / 删除；**文件夹导航**（面包屑、新建/改名/删除、进入子目录）；上传入口为**整页拖放**（拖到页面任意位置松手即传，**传到当前所在目录**）+ 工具条「上传文件」/「上传文件夹」按钮（移动端无拖拽操作）；**拖入或选择文件夹时按 `webkitGetAsEntry()` / `webkitRelativePath` 还原层级**，逐级建目录（同名复用）后把文件放进各自目录 |
 | `/shares` | 分享管理 | **所有人创建的分享都能看到**（带创建者、有效期、查看次数）；可切「只看我的」、复制链接、撤销（自己的或管理员的） |
 | `/s/:token` | 分享页（**免登录**） | 不在主框架内；显示文件名/大小/分享者/有效期，图片·PDF·音视频内联，其余下载；目录分享给打包 zip。三种失效状态各有文案：已过期 / 已被删除 / 链接无效 |
-| `/preview/:id` | 预览 | 全屏预览 |
+| `/preview/:id` | 预览 | **嵌在列表页弹层里的预览面**（`?embed=1`）；也可独立访问（留一个返回入口）。**没有顶部名称/下载栏**，只有外层弹层右上角一个悬浮关闭键（详见表下） |
 | `/admin/users` | 用户管理 | 仅管理员 |
 | `/admin/settings` | 系统管理 | 上传策略 + 存储一致性检查，仅管理员 |
 | `/admin/files` | 全部文件（含回收站） | 仅管理员 |
@@ -495,6 +495,30 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
   但**有失败时保持展开** —— 失败不能被自动折叠藏起来。
 - 折叠状态记在 `localStorage`（`lanfs-upload-panel-collapsed`），刷新后保持。
 
+### 预览弹层（全局，不属于某个路由）
+
+点列表里的「预览」**不再 `window.open` 新标签**，而是在当前页弹出铺满视口的弹层
+（`components/PreviewModal.vue`，与上传浮窗一样挂在 `layouts/MainLayout.vue` 上）：
+
+- **弹层里没有标题栏**：文件名、类型/大小标签、下载按钮那条顶部栏已按要求删除，
+  只保留右上角一个悬浮关闭键（Esc 也可关闭）。
+- **弹层内部是 iframe**，`src="/preview/<id>?embed=1"`。预览状态是全局单例
+  （`stores/preview.ts` 的 `previewState`），入口有 `useFileActions`（表格/移动卡片）
+  与上传队列的「预览」，都只调 `openPreview(id)`——状态放页面里就等于把预览逻辑复制多份，
+  任意一处忘记挂弹层就点不开。
+- iframe 用**同源真实路由**而不是 `srcdoc` + `Teleport`：`srcdoc` 里手工搬 Naive UI 的
+  样式试过，内容能渲染，但 Teleport 出去的部分拿不到 Naive 的 CSS 变量作用域，
+  深色档下提示文字仍是黑色；真同源文档自己跑一遍 SPA 启动，Naive 与明暗主题天然生效。
+- `?embed=1` 让预览页知道「自己被嵌着」，据此**不渲染返回键等自身 chrome**、铺满不留内边距；
+  直接访问 `/preview/:id` 时保留一个左上角悬浮返回键，避免用户困住。
+- **深色适配**：预览专用令牌在 `styles.css`（`--color-preview-stage` / `-paper` /
+  `-code-bg` / `-code-border` / `-slide-backdrop`，明暗两档都覆盖）。约定是
+  「**纸张是内容、舞台是 UI**」：docx / pptx 库渲染出的白纸保持白色（那是文档自身样式），
+  但纸张外的舞台底色、滚动区、边框必须走令牌，深色档下不能出现一块刺眼的浅灰底。
+  注意 docx-preview 的类名由 `renderAsync` 的 `className` 派生
+  （容器 `<className>-wrapper`、纸张 `section.<className>`），此前按默认的 `.docx-wrapper`
+  写覆盖，**从未生效**。
+
 前端环境变量（构建期注入）：
 
 | 变量 | 默认 | 说明 |
@@ -516,7 +540,7 @@ API 地址解析优先级：**运行时 `/config.js` → 构建期 `HOST`（拼�
 连通性探测：登录页与路由守卫调用 `GET /api/health`，用它区分
 「网络不可达」与「账号密码错误」。
 
-预览矩阵（**纯前端**，通过 `/api/files/:id/content` 取 blob 后本地渲染）：
+预览矩阵（**纯前端**，通过 `/api/files/:id/content` 取 blob 后本地渲染，渲染在预览弹层的 iframe 内）：
 
 | 类型 | 实现 |
 | --- | --- |

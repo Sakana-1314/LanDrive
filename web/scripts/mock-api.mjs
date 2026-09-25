@@ -131,6 +131,46 @@ http
       const items = scope === 'mine' ? FILES.filter((f) => f.owner_id === 1) : FILES
       return json(res, { items, total: items.length, page: 1, page_size: 20 })
     }
+    // --- 预览：预览弹层（iframe 内嵌）的端到端检查用 ---
+    // kind 的判定口径与 server/internal/storage.PreviewKind 保持一致：
+    // 前端拿到错误的 kind 会走错渲染分支，检查就测不到真实路径。
+    const previewMatch = p.match(/^\/api\/files\/(\d+)\/preview$/)
+    if (previewMatch) {
+      const f = FILES.find((x) => x.id === Number(previewMatch[1]))
+      if (!f) return json(res, { error: '文件不存在' }, 404)
+      const ext = f.ext.toLowerCase()
+      const INLINE = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff',
+        '.pdf', '.mp4', '.webm', '.mov', '.ogg', '.mp3', '.wav', '.m4a', '.flac', '.aac']
+      const IMAGE = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff']
+      const VIDEO = ['.mp4', '.webm', '.mov', '.ogg']
+      const TEXT = ['.txt', '.md', '.csv', '.log', '.json', '.xml', '.yml', '.yaml', '.ini',
+        '.js', '.ts', '.go', '.py', '.sh', '.java', '.c', '.cpp', '.sql', '.conf', '.env']
+      let kind
+      if (ext === '.docx') kind = 'docx'
+      else if (ext === '.xlsx') kind = 'xlsx'
+      else if (ext === '.pptx') kind = 'pptx'
+      else if (INLINE.includes(ext)) {
+        if (ext === '.pdf') kind = 'pdf'
+        else if (IMAGE.includes(ext)) kind = 'image'
+        else if (VIDEO.includes(ext)) kind = 'video'
+        else kind = 'audio'
+      } else if (['.doc', '.xls', '.ppt'].includes(ext)) kind = 'legacy-office'
+      else if (TEXT.includes(ext)) kind = 'text'
+      else kind = 'unsupported'
+      return json(res, {
+        id: f.id, name: f.original_name, ext: f.ext, size_bytes: f.size_bytes,
+        mime: f.mime, kind, content_url: `/api/files/${f.id}/content`, note: ''
+      })
+    }
+    const contentMatch = p.match(/^\/api\/files\/(\d+)\/content$/)
+    if (contentMatch) {
+      if (!FILES.some((x) => x.id === Number(contentMatch[1]))) {
+        return json(res, { error: '文件不存在' }, 404)
+      }
+      // 文本内容：预览检查要能断言「iframe 内真的渲染出了文件内容」。
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
+      return res.end('MOCK 预览内容第一行\n第二行文本\n')
+    }
     if (p === '/api/files/owners')
       return json(res, {
         items: USERS.map((u) => ({

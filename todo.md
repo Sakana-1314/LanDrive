@@ -16,6 +16,63 @@
 
 ## Log
 
+- **2026-09-25 P28 预览改为列表页内弹层 + iframe 内嵌，并适配深色**
+
+  要求：预览改成 **iframe 内部预览**、**去掉顶部的名称与下载按钮**，并**适配深色模式**。
+
+  **原状**：点「预览」是 `window.open` 新开一个标签页，页面顶部有一条卡片栏
+  （文件名 + 类型/大小标签 + 下载按钮）；预览页与四个预览组件的样式里散着
+  `#fff` / `#f5f7fa` / `#525659` / `#f7f8fa` 等写死的浅色，深色档下是一块刺眼的白。
+
+  **改法**：预览入口全部改成「把文件 id 写进全局单例 `stores/preview.ts`」，
+  由挂在 `MainLayout` 上的 `PreviewModal.vue` 弹出铺满视口的弹层，弹层内是
+  `src="/preview/<id>?embed=1"` 的 iframe；预览页据此不再渲染返回键等自身 chrome，
+  也没有任何标题栏 —— 唯一的退出方式是两个悬浮关闭键之一（弹层右上角 / Esc）。
+
+  **两个刻意的技术取舍**（都做了真实浏览器验证，不是拍脑袋）：
+  - **iframe 必须用同源真实文档，不能用 `srcdoc` + Vue `Teleport`。**
+    先按 srcdoc 方案写完并跑通了：内容能渲染、事件也能点。但实测深色档下
+    Teleport 出去的内容**拿不到 Naive 的 CSS 变量作用域** —— `.n-alert` 的文字
+    仍是 `rgb(0,0,0)`，而同一页面外层的 Naive 已经跟着主题变了。根因是 Naive
+    把每个组件的 CSS 变量挂在**自己所在文档**的样式表上，跨文档 Teleport 后
+    作用域对不上。换成同源真实路由后，iframe 自己跑一遍 SPA 启动，
+    Naive 与明暗主题天然生效（实测 iframe 内 `data-theme="dark"`、
+    预览面底色 `#1c222b`）。
+  - **「纸张是内容，舞台是 UI」**：docx/pptx 库渲染出的白纸保持白色 ——
+    那是文档自身的样式（Word 页面本来就白底黑字），跟着界面变深反而失真；
+    但纸张**外面**的舞台底色、滚动区、边框必须走令牌。为此在 `styles.css`
+    新增了一组预览专用令牌（`--color-preview-stage/paper/backdrop/code-bg/
+    code-border/slide-backdrop`），明暗两档都覆盖。
+
+  **顺带修掉两个真缺陷**：
+  1. `DocxPreview.vue` 覆盖纸张样式的选择器写的是 `.docx-wrapper`，
+     而 `renderAsync` 传的 `className: 'docx-preview-root'` 会让实际类名变成
+     `.docx-preview-root-wrapper` / `section.docx-preview-root` —— **这段覆盖从来
+     没生效过**（一直是库内置的 `background: gray` 在生效）。已改成按实际类名匹配。
+  2. 悬浮关闭键压住文本预览右上角的「复制全部」：深色档下量出来只差 8px，
+     浅色档出现滚动条后布局左移、两者**真的叠上**，那个按钮就点不动了
+     （截图时发现）。已在嵌入态给右上角留 44px 安全区。
+
+  **测试**（4 项变异验证，不是假绿）：
+  - 新增 `scripts/check-preview.mjs`（真实浏览器，接入 `npm run test:preview`
+    与 CI）：点预览**不新开标签**（`page.on('popup')` 计数）、弹层内**恰好一个
+    iframe** 且 src 指向 `/preview/<id>?embed=1`、顶部栏 `.preview-bar` 归零、
+    弹层内不出现「下载」、**iframe 里真的渲染出文件正文**（挑一个必定能渲染的
+    `.csv` 断言正文文本 —— 只断言「有字」会被错误提示蒙混过去）、嵌入态不渲染
+    返回键、关闭键与内容右上角控件不重叠且点它不会误关弹层、深色档 iframe 内
+    也是深色且预览面底色不过亮、无 JS 报错。
+  - 变异验证：把 `openPreview` 改回 `window.open` → 报「无弹层」；
+    把旧顶部栏加回来 → 报「iframe 内还残留顶部栏」；把预览面底色写死 `#ffffff`
+    → 报「深色档下预览面底色过亮」；把内容接口改成返回空正文 → 报「没有渲染出
+    文件正文」；去掉 44px 安全区 → 报「关闭键与右上角控件重叠」。5 项全部如期报错。
+  - `mock-api.mjs` 补了 `/api/files/:id/preview` 与 `/api/files/:id/content`
+    两个接口（kind 判定口径与 `server/internal/storage.PreviewKind` 对齐），
+    否则弹层打不开、检查测不到真实路径。
+
+  **全量回归**：`typecheck` / `npm test` / `build` 全绿；5 个浏览器检查
+  （responsive 5 视口 / file-list / upload-panel / folder-upload / preview）全部通过。
+  纯前端改动，`server/**` 与接口契约未动。
+
 - **2026-09-25 P27 文件夹与文件同列展示，对齐 Windows 资源管理器（PR #24）+ 部署**
 
   要求：**文件夹不要单独放上面**，要像 Windows 文件系统那样在同一个列表里列出来。

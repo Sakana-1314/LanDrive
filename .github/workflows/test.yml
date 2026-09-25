@@ -216,6 +216,16 @@ jobs:
           REQUIRE_PLAYWRIGHT: "1"
         run: npm run test:file-list
 
+      # 预览改为弹层内嵌 iframe：不能新开标签、弹层内不能有顶部名称/下载栏、
+      # iframe 里真的渲染出内容、深色档不能用写死的浅色底。
+      # 这几条都是「DOM 里有没有这个东西」「点一下是否新开标签」的行为，
+      # 类型检查与纯函数单测都覆盖不到。
+      - name: 预览弹层检查（页内 iframe、无顶部栏、深色适配）
+        working-directory: web
+        env:
+          REQUIRE_PLAYWRIGHT: "1"
+        run: npm run test:preview
+
       - name: 校验构建产物
         working-directory: web
         run: |

@@ -41,6 +41,17 @@
   --color-table-row-hover: #f4f7ff;
   --color-panel: #f6f8fb;
 
+  /* 预览专用：文档纸张是内容（白底黑字是文档本身的样式，不随外观变），
+     因此单独给一组「纸张外」的颜色 —— 深色档下若沿用白色/浅灰，
+     深色界面里会插着一块刺眼的浅色底。 */
+  --color-preview-stage: #e9edf3;
+  --color-preview-paper: #ffffff;
+  /* 文本预览的正文底色与描边（纯文本是 UI 呈现，不跟随文档样式）。 */
+  --color-preview-code-bg: #fafbfc;
+  --color-preview-code-border: #eceff4;
+  /* 幻灯片预览的背景：库自身在深色下也是最深的一块，两档给同一语义的两个值。 */
+  --color-preview-slide-backdrop: #3d4148;
+
   --radius-control: 9px;
   --radius-card: 14px;
   --radius-pill: 999px;
@@ -101,6 +112,13 @@
   --color-table-header: #1e242d;
   --color-table-row-hover: #212936;
   --color-panel: #1e242d;
+
+  /* 预览：纸张仍是白的（内容），但纸张外的舞台与遮罩必须跟着变深。 */
+  --color-preview-stage: #1c222b;
+  --color-preview-paper: #ffffff;
+  --color-preview-code-bg: #171c24;
+  --color-preview-code-border: #2a313b;
+  --color-preview-slide-backdrop: #2a2e35;
 
   --shadow-card: 0 8px 24px rgb(0 0 0 / 32%);
   --shadow-card-hover: 0 12px 30px rgb(0 0 0 / 42%);

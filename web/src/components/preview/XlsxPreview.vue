@@ -129,32 +129,36 @@ watch(
 
 <style scoped>
 .xlsx-wrap {
-  background: #fff;
+  height: 100%;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
 }
 .sheet-scroll {
-  max-height: calc(100vh - 230px);
+  max-height: calc(100dvh - 220px);
   overflow: auto;
-  border: 1px solid #e8e8e8;
-  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  /* 表格是我们自己渲染的 UI（不是 Excel 的忠实版面），因此跟随明暗外观。 */
+  background: var(--color-surface);
 }
 .sheet {
   border-collapse: collapse;
+  color: var(--color-text);
   font-size: 13px;
   white-space: nowrap;
 }
 .sheet th,
 .sheet td {
-  border: 1px solid #ededed;
+  border: 1px solid var(--color-border-subtle);
   padding: 3px 8px;
   max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .sheet th.rowno {
-  background: #f7f8fa;
-  color: #999;
+  background: var(--color-table-header);
+  color: var(--color-text-muted);
   font-weight: normal;
   text-align: right;
   position: sticky;
@@ -163,6 +167,6 @@ watch(
 }
 .sheet tbody tr:first-child td {
   font-weight: 600;
-  background: #fafbfc;
+  background: var(--color-table-header);
 }
 </style>
