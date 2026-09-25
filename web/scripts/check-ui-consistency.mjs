@@ -100,11 +100,18 @@ for (const file of walk(SRC)) {
       problems.push(`${file}: n-card 内联 border-radius（应统一用 .card-surface / --radius-card）`)
     }
   }
+
+  // 5) 空状态只能由 FileTable 负责：页面级再写一条会与表格内的空提示同时出现。
+  //    真实事故：FilesView 在 FileTable 之上又加了一条「这里还没有文件」，
+  //    与表格里的「暂无文件」同屏渲染，页面上出现两遍空提示。
+  if (/FileTable/.test(tpl) && /<n-empty/.test(tpl)) {
+    problems.push(`${file}: 用了 FileTable 又自己写 <n-empty>（空状态重复渲染，页面会出现两遍提示）；请交给 FileTable 的 #empty / 移动端空态`)
+  }
 }
 
 if (problems.length) {
-  console.error(`❌ 发现 ${problems.length} 处头部/卡片不一致：`)
+  console.error(`❌ 发现 ${problems.length} 处头部/卡片/空状态不一致：`)
   for (const p of problems) console.error('   - ' + p)
   process.exit(1)
 }
-console.log('✅ 头部结构检查通过：左筛选/右按钮、控件统一 34px、卡片圆角统一')
+console.log('✅ 头部结构检查通过：左筛选/右按钮、控件统一 34px、卡片圆角统一、空状态唯一')

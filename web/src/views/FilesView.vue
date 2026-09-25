@@ -14,7 +14,6 @@ import {
   NAlert,
   NButton,
   NCard,
-  NEmpty,
   NIcon,
   NInput,
   NModal,
@@ -389,11 +388,11 @@ onMounted(() => {
         @clear-finished="clearFinishedUploads"
       />
 
-      <n-empty
-        v-if="folderNavEnabled && !folders.length && !items.length && !loading && folderId === 0"
-        description="这里还没有文件"
-        style="padding: 24px 0"
-      />
+      <!--
+        空状态由 FileTable 统一渲染（桌面表格的 #empty 与移动端卡片各一处）。
+        这里**不要**再加页面级 n-empty：PR #13 加过一条「这里还没有文件」，
+        与表格内的「暂无文件」同时渲染，页面上就出现了两遍空提示。
+      -->
 
       <FileTable
         v-model:keyword="keyword"
