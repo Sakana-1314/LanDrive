@@ -344,9 +344,23 @@ func (s *Service) SetPermanent(ctx context.Context, id int64, permanent bool, ac
 	if err := s.checkCanModify(f, actor); err != nil {
 		return nil, err
 	}
+	// checkCanModify 对管理员直接放行（管理员本来就要能打理回收站），但"设为永久"
+	// 对回收站里的文件没有意义：它不计入配额（配额只算 active），等回收站到点
+	// 清理时又会被物理删掉。所以这里对所有人一律只认 active 文件 ——
+	// 与函数注释、docs/design.md 同一口径。
+	if f.Status != model.StatusActive {
+		return nil, fmt.Errorf("%w: 文件已被删除，无法设置有效期", store.ErrState)
+	}
 	var expiresAt *time.Time
 	if permanent {
-		if err := s.ensurePermanentFits(ctx, 1, f.SizeBytes); err != nil {
+		// 已经是永久的文件不再重复计入"新增占用"：它本来就算在 used 里，
+		// 再算一遍会让"对同一个文件重发一次请求"（超时重试、双标签页、
+		// 列表里 permanent 还没刷新的旧行）被 409 拒掉 —— 而 PUT 应当幂等。
+		add := int64(0)
+		if f.ExpiresAt != nil {
+			add = f.SizeBytes
+		}
+		if err := s.ensurePermanentFits(ctx, 1, add); err != nil {
 			return nil, err
 		}
 		expiresAt = nil
@@ -376,11 +390,12 @@ func (s *Service) SetPermanentUnderFolder(ctx context.Context, ownerID int64, di
 	var expiresAt *time.Time
 	if permanent {
 		// 配额按"本次会新增多少"算：已经是永久的不重复计入。
-		add, err := s.store.PermanentizableBytes(ctx, ownerID, dirRel)
+		// 顺便取回文件数，供配额不足的提示写明"涉及几个文件"。
+		count, add, err := s.store.PermanentizableStats(ctx, ownerID, dirRel)
 		if err != nil {
 			return 0, err
 		}
-		if err := s.ensurePermanentFits(ctx, 1, add); err != nil {
+		if err := s.ensurePermanentFits(ctx, int(count), add); err != nil {
 			return 0, err
 		}
 	} else {

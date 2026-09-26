@@ -517,28 +517,21 @@ func (s *Store) SetExpiryUnderPath(ctx context.Context, ownerID int64, dirRel st
 	return res.RowsAffected()
 }
 
-// PermanentUsageUnderPath 汇总某目录树下的永久文件占用。
-func (s *Store) PermanentUsageUnderPath(ctx context.Context, ownerID int64, dirRel string) (int64, error) {
-	var n int64
-	err := s.db.QueryRowContext(ctx,
-		`SELECT CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) FROM files
-		 WHERE owner_id = ? AND status = ? AND expires_at IS NULL AND rel_path LIKE ?`,
-		ownerID, model.StatusActive, escapeLike(dirRel)+"/%").Scan(&n)
-	return n, err
-}
-
-// PermanentizableBytes 汇总"若把该目录树设为永久，会新增占用多少字节"。
+// PermanentizableStats 汇总"若把该目录树设为永久，会新增占用多少字节、涉及多少个文件"。
 //
 // 只算**当前还不是永久**的 active 文件（expires_at IS NOT NULL）：
 // 已经是永久的那些早就计入配额了，再算一遍会让差额提示虚高，
 // 用户看着"还差 3GB"却怎么清理都设不上。
-func (s *Store) PermanentizableBytes(ctx context.Context, ownerID int64, dirRel string) (int64, error) {
-	var n int64
+//
+// 同时返回文件数：配额不足的提示要写明"本次涉及 N 个文件"，
+// 光有字节数只能瞎猜一个数字（曾写死成 1，200 个文件的目录也报"涉及 1 个文件"）。
+func (s *Store) PermanentizableStats(ctx context.Context, ownerID int64, dirRel string) (int64, int64, error) {
+	var count, n int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) FROM files
+		`SELECT COUNT(*), CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) FROM files
 		 WHERE owner_id = ? AND status = ? AND expires_at IS NOT NULL AND rel_path LIKE ?`,
-		ownerID, model.StatusActive, escapeLike(dirRel)+"/%").Scan(&n)
-	return n, err
+		ownerID, model.StatusActive, escapeLike(dirRel)+"/%").Scan(&count, &n)
+	return count, n, err
 }
 
 // Stats 汇总管理端看板数据。

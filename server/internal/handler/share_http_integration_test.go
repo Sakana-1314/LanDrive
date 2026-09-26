@@ -41,6 +41,7 @@ type httpEnv struct {
 	disk   *storage.Storage
 	maint  *maintain.Service
 	set    *settings.Service
+	tokens *auth.TokenManager
 	user   *model.User
 	token  string
 }
@@ -107,7 +108,29 @@ func newHTTPEnv(t *testing.T) *httpEnv {
 	if err != nil {
 		t.Fatalf("签发令牌: %v", err)
 	}
-	return &httpEnv{engine: engine, st: st, disk: disk, maint: maintSvc, set: set, user: u, token: tok}
+	return &httpEnv{engine: engine, st: st, disk: disk, maint: maintSvc, set: set, tokens: tokens, user: u, token: tok}
+}
+
+// adminToken 另建一个管理员并签发令牌。
+//
+// 存在的理由：`checkCanModify` 对管理员直接放行（管理员要能打理回收站），
+// 于是任何"只对属主生效"的 status 校验都会被管理员绕过 —— 这类断言必须
+// 用管理员身份才测得到，用普通属主的令牌测永远是绿的。
+func (e *httpEnv) adminToken(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+	a := &model.User{
+		EmployeeNo: "90002", Name: "管理员", Password: "a",
+		Role: model.RoleAdmin, Enabled: true, DirRel: "users/90002",
+	}
+	if err := e.st.CreateUser(ctx, a); err != nil {
+		t.Fatalf("CreateUser(admin): %v", err)
+	}
+	tok, _, err := e.tokens.Issue(a.ID, a.EmployeeNo, a.Role, a.Password)
+	if err != nil {
+		t.Fatalf("签发管理员令牌: %v", err)
+	}
+	return tok
 }
 
 // do 发一个请求。token 为空表示**不带 Authorization 头**（模拟外部访客）。
@@ -1059,6 +1082,100 @@ func TestPermanentExpiryAndQuota(t *testing.T) {
 		// 关闭状态下改成有期限仍应可用（那是"退回"，不是"申请额度"）。
 		if w := e.do(t, "PUT", "/api/files/"+itoa(big.ID)+"/permanent", e.token, `{"permanent":false}`); w.Code != http.StatusOK {
 			t.Fatalf("关闭永久功能后改回有期限仍应成功，实际 %d", w.Code)
+		}
+	}
+}
+
+// TestPermanentQuotaEdgeCases 守住三条"接口层面"的口径。
+//
+// 它们都不影响"设永久能成功"的主路径，但写错了用户会在重试、回收站和报错文案上踩到：
+//
+//  1. 对**已经是永久**的文件重发一次请求必须成功 —— PUT 应当幂等，
+//     而这时配额已经用满，若把该文件的大小再算一遍"新增占用"就会被 409 拒掉；
+//  2. 回收站里的文件**谁都不能设永久**（含管理员）—— 它不计入配额
+//     （配额只算 active），等回收站到点清理时又会被物理删掉；
+//  3. 目录级配额不足的提示要写明"涉及几个文件"，而不是写死 1。
+func TestPermanentQuotaEdgeCases(t *testing.T) {
+	e := newHTTPEnv(t)
+	ctx := context.Background()
+
+	// 配额 1MB，正好装下一个 1MB 的文件 —— 之后 used == quota：
+	// 任何"真的新增占用"的请求都会被拒，幂等重发是唯一还能过的那类。
+	oneMB := 1
+	if _, err := e.set.Update(ctx, settings.Patch{PermanentQuotaMB: &oneMB}); err != nil {
+		t.Fatalf("设置永久配额: %v", err)
+	}
+	small := e.mkFile(t, "小文件.txt", ".txt", strings.Repeat("s", 1<<20))
+	if w := e.do(t, "PUT", "/api/files/"+itoa(small.ID)+"/permanent", e.token, `{"permanent":true}`); w.Code != http.StatusOK {
+		t.Fatalf("设永久失败 code=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// --- 1) 幂等：配额正好用满时，对已永久的文件重发必须成功 ---
+	{
+		w := e.do(t, "PUT", "/api/files/"+itoa(small.ID)+"/permanent", e.token, `{"permanent":true}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("对已永久的文件重发设永久应成功（PUT 幂等），实际 code=%d body=%s", w.Code, w.Body.String())
+		}
+	}
+
+	// --- 2) 回收站里的文件不能设永久（管理员也不行） ---
+	{
+		// 先把配额放宽：配额卡在 used == quota 时，这一步会被"配额不足"挡下，
+		// 断言看起来是绿的、其实根本没测到 status 那条闸（因错误的原因通过）。
+		// 变异验证过：删掉服务层的 status 校验后，只有给足配额才抓得住。
+		room := 100
+		if _, err := e.set.Update(ctx, settings.Patch{PermanentQuotaMB: &room}); err != nil {
+			t.Fatalf("放宽永久配额: %v", err)
+		}
+		trashed := e.mkFile(t, "待删.txt", ".txt", strings.Repeat("x", 100))
+		if w := e.do(t, "DELETE", "/api/files/"+itoa(trashed.ID), e.token, ""); w.Code != http.StatusOK {
+			t.Fatalf("删除文件失败 code=%d body=%s", w.Code, w.Body.String())
+		}
+		// 必须用管理员令牌：普通属主本来就被 checkCanModify 的 status 分支挡住，
+		// 只有管理员才能暴露"服务层漏判 status"这个洞。
+		admin := e.adminToken(t)
+		w := e.do(t, "PUT", "/api/files/"+itoa(trashed.ID)+"/permanent", admin, `{"permanent":true}`)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "已被删除") {
+			t.Fatalf("回收站里的文件设永久应返回 409 并说明原因，实际 code=%d body=%s", w.Code, w.Body.String())
+		}
+		got, err := e.st.GetFile(ctx, trashed.ID)
+		if err != nil {
+			t.Fatalf("读取已删文件: %v", err)
+		}
+		if got.ExpiresAt == nil {
+			t.Fatalf("请求被拒后不应把回收站里的文件改成永久")
+		}
+		// 再走真实的恢复接口（恢复会保留"永久"这个标记）：若上一步偷偷生效了，
+		// 这里就会恢复出一个永久文件 —— 于是"永久化被延后生效"也会被抓住。
+		if w := e.do(t, "POST", "/api/admin/files/"+itoa(trashed.ID)+"/restore", admin, ""); w.Code != http.StatusOK {
+			t.Fatalf("恢复文件失败 code=%d body=%s", w.Code, w.Body.String())
+		}
+		back, err := e.st.GetFile(ctx, trashed.ID)
+		if err != nil {
+			t.Fatalf("恢复后读取: %v", err)
+		}
+		if back.ExpiresAt == nil {
+			t.Fatalf("恢复后仍应是有期限的文件（永久化不该被延后生效）")
+		}
+	}
+
+	// --- 3) 目录级配额不足要写明真实文件数，而不是写死 1 ---
+	{
+		// 配额收紧回 1MB：上一步为了隔离 status 校验特意放宽过，
+		// 不放回来的话这里的目录（2MB）反而装得下，就测不到超配额文案了。
+		tight := 1
+		if _, err := e.set.Update(ctx, settings.Patch{PermanentQuotaMB: &tight}); err != nil {
+			t.Fatalf("收紧永久配额: %v", err)
+		}
+		top := e.createFolder(t, "大目录", 0)
+		e.mkFileInFolder(t, "a.txt", ".txt", strings.Repeat("a", 1<<20), top.ID)
+		e.mkFileInFolder(t, "b.txt", ".txt", strings.Repeat("b", 1<<20), top.ID)
+		w := e.do(t, "PUT", "/api/folders/"+itoa(top.ID)+"/permanent", e.token, `{"permanent":true}`)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("目录超配额应返回 409，实际 code=%d body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "涉及 2 个文件") {
+			t.Fatalf("配额不足的提示应写明涉及 2 个文件，实际 %s", w.Body.String())
 		}
 	}
 }

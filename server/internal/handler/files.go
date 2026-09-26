@@ -213,8 +213,13 @@ func (h *Handler) PermanentStatus(c *gin.Context) {
 
 // setPermanentReq 是设置永久的请求体。
 //
-// 用指针是为了区分"没传"与"传了 false"：没传时按"设为永久"处理
-// （保持接口向后兼容、调用方少写一个字段），传了 false 才是改回有期限。
+// 用指针是为了区分"没传字段"与"传了 false"：请求体里**没有** permanent 字段时
+// 按"设为永久"处理（保持接口向后兼容、调用方少写一个字段），传了 false 才是
+// 改回有期限。
+//
+// 注意：**空请求体不算"没传字段"** —— 它不是合法 JSON，bindJSON 会以 400
+// 拒绝（"不写字段"的写法是 `{}`）。前端始终带 body，所以这条只在手工调接口时
+// 才会遇到。
 type setPermanentReq struct {
 	Permanent *bool `json:"permanent"`
 }
