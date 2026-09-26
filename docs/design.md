@@ -117,7 +117,7 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
 | `sha256` | CHAR(64) | 合并完成后计算的校验值 |
 | `rel_path` | VARCHAR(512) UNIQUE | 相对数据根目录的路径 |
 | `status` | VARCHAR(16) | `active` / `trashed` |
-| `expires_at` | DATETIME | 到期标记删除的时间点 |
+| `expires_at` | DATETIME **NULL** | 到期标记删除的时间点；**NULL = 永久**，不参与到期扫描（0004 迁移由 NOT NULL 改为可空） |
 | `deleted_at` | DATETIME NULL | 进入回收站的时刻 |
 | `purge_at` | DATETIME NULL | 物理删除的时刻 |
 | `created_at` / `updated_at` | DATETIME | |
@@ -163,6 +163,17 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
 | `trash_days` | `7` | 0–365，标记删除后继续保留的天数 |
 | `chunk_size_mb` | `4` | 1–64 |
 | `upload_enabled` | `true` | 维护期全局关闭上传 |
+| `preview_max_size_mb` | `20` | 0–102400，**0 表示不限制预览体积** |
+| `permanent_quota_mb` | `102400`（100G） | 0–104857600，**全站共享**的永久空间上限；**0 表示关闭「设为永久」** |
+
+`preview_max_size_mb` 只约束**在线预览**，与 `max_file_size_mb`（能不能上传）是两件事：
+预览要把整个文件读进浏览器（docx/xlsx/pptx 还要交给纯前端库解析），超大文件会把标签页
+拖死，因此单独设一道闸。**下载始终不受它影响** —— 大文件下到本地看没问题。
+
+`permanent_quota_mb` 是「永久文件」的总量闸（详见「文件有效期」一节）。两个反直觉点：
+**全站一个池**（不是每人一份，否则总量随人数无限增长）、**0 = 关闭该功能**
+（不是"只允许 0 字节"）。管理员可以把配额调到低于当前已用：已设为永久的文件**不回收**，
+只是新的"设为永久"会因超额度被拒。
 
 ### folders
 
@@ -228,14 +239,46 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
 上传完成 ──► active ──(now ≥ expires_at)──► trashed ──(now ≥ purge_at)──► 物理删除（DB 行 + 磁盘文件）
               ▲                                │
               └──────── 管理员恢复 ◄────────────┘
+
+永久文件（expires_at IS NULL）：active ──删除──► trashed ──► 物理删除
+（**不参与到期扫描**，只能由删除/彻底删除终结）
 ```
 
 - 上传完成时：`status=active`，`expires_at = now + retention_days`。
 - 到期扫描（每 5 分钟）：`active` 且 `expires_at <= now` → `status=trashed`、`deleted_at=now`、`purge_at=now + trash_days`。
+  `expires_at IS NULL` 的行天然不被 `<=` 命中，因此**永久文件不会被扫到** —— 这正是"永久"的实现方式。
 - 物理清理（每 10 分钟）：`trashed` 且 `purge_at <= now` → 先删磁盘文件再删 DB 行；磁盘文件已不存在也照删 DB 行。
 - 属主主动删除：立即 `status=trashed`、`deleted_at=now`、`purge_at=now + trash_days`。
-- 管理员恢复：`status=active`、清空 `deleted_at`/`purge_at`、`expires_at = now + retention_days`。
+- 管理员恢复：`status=active`、清空 `deleted_at`/`purge_at`；原本**有期限**的按 `now + retention_days` 重新计时，
+  原本**永久**的保持 `expires_at` 为 NULL（恢复的语义是"回到删除前的样子"，不顺手改用户的设定）。
 - **trashed 文件对普通用户（含属主）完全不可见、不可下载、不可预览**；只有管理员回收站可见。
+
+### 文件有效期（永久）
+
+`expires_at` 为 NULL 即"永久"：不会自动清理，需要手动删除。与 `shares` 表的
+`expires_at IS NULL = 永久分享` 是同一套语义（用 NULL 而不是 9999 哨兵时间，理由见 0004 迁移注释）。
+
+接口：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/files/permanent` | `{enabled, quota_bytes, used_bytes, free_bytes}`；**全站**口径，前端在二次确认里展示"还剩多少" |
+| PUT | `/api/files/:id/permanent` | `{permanent?: bool}`，省略或 `true` = 设永久；`false` = 改回有期限（按当前保留天数重新计时） |
+| PUT | `/api/folders/:id/permanent` | 同上，但作用范围是**该目录树下（含子孙）的所有 active 文件**；返回 `{affected}` |
+
+几个刻意的取舍：
+
+- **有效期是文件的属性，不是目录的**。目录级接口只是一次"批量操作的范围"，
+  所以返回受影响文件数、不写 folders 表。范围用 `rel_path` 前缀匹配，
+  与"统计该目录下有多少文件"同一套算法，口径天然一致。
+- **配额是全站共享的一个池**，计数口径是"所有 `active` 且 `expires_at IS NULL` 文件的
+  `size_bytes` 之和"。**刻意不含回收站里的永久文件**：那些已设 `purge_at`、几天内必被清掉，
+  算进来会让"删文件"这个唯一的自救手段不释放额度。代价是删掉到彻底清理之间额度不释放，
+  放大倍数受 `trash_days` 约束、不会无限增长。
+- 鉴权：属主或管理员（与改名/删除同一套 `checkCanModify`）；只对 **active** 文件开放 ——
+  回收站里的文件先恢复再说，否则设了永久也马上会被清理掉。
+- 超配额返回 **409**（与当前服务端状态冲突，清点东西再试即可），
+  错误文案带「已用 / 上限 / 还需多少」，用户可直接照做；配额为 0（功能关闭）返回 **403**。
 
 ### 定时任务
 
@@ -286,9 +329,18 @@ type FileItem = {
   owner_name: string; owner_employee_no: string;
   original_name: string; ext: string; size_bytes: number; mime: string; sha256: string;
   rel_path: string; status: 'active' | 'trashed';
-  expires_at: string; deleted_at: string | null; purge_at: string | null;
-  days_left: number; is_mine: boolean; can_edit: boolean;
+  expires_at: string | null;  /* null = 永久 */
+  deleted_at: string | null; purge_at: string | null;
+  /* days_left 对永久文件恒为 0；判断"是否永久"要看 permanent，别用 days_left 推断 */
+  days_left: number; permanent: boolean;
+  is_mine: boolean; can_edit: boolean;
   created_at: string; updated_at: string;
+}
+
+type PermanentStatus = {
+  enabled: boolean;      /* 配额为 0 时为 false（永久功能被关闭） */
+  quota_bytes: number; used_bytes: number;
+  free_bytes: number;    /* 已超额时为 0，不会是负数 */
 }
 
 type UploadSession = {
@@ -343,6 +395,8 @@ type Settings = {
   max_file_size_mb: number; allowed_extensions: string;
   retention_days: number; trash_days: number;
   chunk_size_mb: number; upload_enabled: boolean;
+  preview_max_size_mb: number;  // 0 = 不限制预览体积
+  permanent_quota_mb: number;   // 全站共享；0 = 关闭「设为永久」
 }
 
 type Stats = {
@@ -372,7 +426,7 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | PUT | `/api/files/owners/:id/pin` | 置顶某人目录（幂等）→ 204 |
 | DELETE | `/api/files/owners/:id/pin` | 取消置顶（幂等）→ 204 |
 | GET | `/api/files/:id` | `FileItem` |
-| GET | `/api/files/:id/content` | 内联字节流，支持 `Range`，`Content-Type` 取 `mime`；用于预览与音视频拖动 |
+| GET | `/api/files/:id/content` | 内联字节流，支持 `Range`，`Content-Type` 取 `mime`；用于预览与音视频拖动。**超 `preview_max_size_mb` 的类型不内联**（降级为附件），下载仍可用 |
 | GET | `/api/files/:id/download` | 附件下载，`Content-Disposition` 用 RFC 5987 还原原始文件名 |
 | PATCH | `/api/files/:id` | `{original_name}`，仅属主；只允许改主名，扩展名不可变（否则 400）；重名自动追加 ` (n)` |
 | DELETE | `/api/files/:id` | 属主软删除（进回收站），返回 `{ok: true}` |
@@ -401,7 +455,10 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | --- | --- | --- |
 | GET | `/api/s/:token` | 解析分享。**统一返回 200 + `status` 字段**（`ok` / `expired` / `deleted` / `notfound`）—— 用 404 表示一切会让前端无法区分"过期""文件被删""链接错了" |
 | GET | `/api/s/:token/download` | 附件下载；失效时 `410`（过期/已删除，文案分别是「该分享链接已过期」「分享的文件已被删除」）或 `404`（无效）。文件夹分享返回**流式 zip**（上限 2000 个文件 / 2 GiB，超限 413） |
-| GET | `/api/s/:token/content` | 内联字节流，仍受 `IsInlinePreviewable` 限制；其余强制附件下发 |
+| GET | `/api/s/:token/content` | 内联字节流，仍受 `IsInlinePreviewable` 限制；其余强制附件下发。**超 `preview_max_size_mb` 的文件同样降级为附件**（下载可用，只是不内联） |
+
+`GET /api/s/:token` 返回的 `kind` 同样经过预览体积闸（`too-large`），
+与登录态 `GET /api/files/:id/preview` 完全一致 —— 免登录链接不是绕过上限的后门。
 
 ### 分片上传
 
@@ -466,8 +523,9 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 | 路由 | 页面 | 说明 |
 | --- | --- | --- |
 | `/login` | 登录 | 工号 + 密码 |
-| `/files` | 全部文件 | 侧栏「全部文件」展开即为按人的子 tab（`?owner=<id>`）；人人可下载 / 预览。子 tab **只显示姓名**，右侧「⋯」下拉里以**勾选项**切换置顶（详见表下） |
+| `/files` | 按人查看 | **只承载 `?owner=<id>`**（侧栏「全部文件」展开后的用户子 tab 落点）：看某个人的目录，人人可下载 / 预览。**不带 owner 时重定向到 `/files/mine`** —— 「全部人员混合视图」已下线（详见下方「侧栏用户子 tab」）。子 tab 只显示姓名，行尾「⋯」下拉里以**勾选项**切换置顶 |
 | （列表形态） | 文件浏览器 | **文件夹与文件在同一个列表里，文件夹排在前面**（Windows 资源管理器的形态；此前子文件夹是列表上方单独的一坨卡片，同一个目录的两类东西被拆在两处、要上下扫两遍）。桌面端表格的「名称」列混合两种行（文件夹行有底色、显示项数而不是体积），移动端卡片同理。行模型是纯函数 `web/src/utils/fileRows.ts`：文件夹只在第 1 页列出（文件由服务端分页、文件夹不是，每页重复渲染会出现「内容重复」的错觉）、按名称本地排序（数字/字母在前、中文在后，不跟服务端文件排序器走）、搜索时按**文件夹名**本地匹配（服务端 `q` 只作用于文件，全藏会让用户进不去命中的目录、全留则会掺入无关目录） |
+| （有效期操作） | 设为永久 | 文件行有「设为永久」/「改回有期限」（已永久时）、文件夹行有「有效期」（**递归到目录下所有文件**）。**两者都必须二次确认**，确认框里给出永久空间「已用 / 上限 / 还剩」——需求要求提示永久空间只有 100G，一个写死的数字没用，用户要看到自己还剩多少。到期列的渲染有坑：永久文件后端 `days_left=0`，**直接按 days_left 渲染会显示成「今天到期」**，必须先判 `permanent`（由 `scripts/check-file-list.mjs` 守卫）。后端按到期时间排序时永久文件**固定排最后**（否则升序时 NULL 冒到最前，看着像"马上到期"） |
 | `/files/mine` | 我的文件 | 仅自己的文件，可改名 / 删除；**文件夹导航**（面包屑、新建/改名/删除、进入子目录）；上传入口为**整页拖放**（拖到页面任意位置松手即传，**传到当前所在目录**）+ 工具条「上传文件」/「上传文件夹」按钮（移动端无拖拽操作）；**拖入或选择文件夹时按 `webkitGetAsEntry()` / `webkitRelativePath` 还原层级**，逐级建目录（同名复用）后把文件放进各自目录 |
 | `/shares` | 分享管理 | **所有人创建的分享都能看到**（带创建者、有效期、查看次数）；可切「只看我的」、复制链接、撤销（自己的或管理员的） |
 | `/s/:token` | 分享页（**免登录**） | 不在主框架内；显示文件名/大小/分享者/有效期，图片·PDF·音视频内联，其余下载；目录分享给打包 zip。三种失效状态各有文案：已过期 / 已被删除 / 链接无效 |
@@ -483,16 +541,40 @@ type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 
 「全部文件」展开后按人列子 tab（`?owner=<id>`）：
 
+- **母 tab「全部文件」不可点击导航**：它只是**展开/收起的分组标题**，内部没有
+  `<a>`，点它只切换子 tab、不改 URL。
+  此前它是「标签导航 + 箭头展开」的双重控件（点文字去看"全部人员"、点箭头展开），
+  同一个控件两个动作会让点击预期不确定 —— 想展开的人被带走、想进列表的人
+  不知道该点哪。**「全部人员混合视图」已随之整体下线**：它把所有人的文件混在一页，
+  既不能上传（后端只允许传到自己目录）、也没有目录导航（跨人同名文件夹没有意义），
+  是个信息量低又容易误操作的页面。要看某人就直接点他的子 tab。
+  配套：`/files` 不带 owner 时重定向到 `/files/mine`（保住旧书签与预览页返回逻辑，
+  不直接删路由）；FileTable 的「上传者」列在该页已无意义（整列都是同一个人）故不显示。
+  由 `scripts/check-sidebar.mjs` 的「母 tab 不可导航」一组断言守卫（桌面端）。
 - **文案只显示姓名**，不带文件数。侧栏是导航而不是数据看板：带上计数会让每行变长、
   姓名被挤窄，而"谁的文件多"对"点进去找文件"没有帮助。
-  （名下没有文件的账号仍然不列出 —— 列出也只会点进空列表。）
-- **置顶收在右侧「⋯」下拉里**，是一个**勾选项**：已置顶时该项显示对勾，
+  （名下没有文件的账号仍然不列出 —— 列出也只会点进空列表；此时分组整个不渲染，
+  避免留下一个展开了空无一物的父级。）
+- **置顶收在行尾的「⋯」下拉里**，是一个**勾选项**：已置顶时该项显示对勾，
   触发键本身也点亮。不再是一个行内图钉按钮 —— 图钉只能表达一件事，
   而且"点下去是置顶还是取消"只能靠悬停提示区分，触屏上根本没有提示。
+- **触发键要贴行尾**：`n-menu` 把 `extra` 放在**标题单元格内部**，默认只会紧跟在
+  姓名后面 —— 实测 208px 侧栏里落在 x≈64~83，而标题区一直铺到 x=190，
+  看着像"粘在名字上"，不像行尾的操作入口。改法是把标题单元格改成 flex、
+  让 `extra` 用 `margin-left: auto` 吃掉剩余空间，**只作用于挂了 `owner-tab`
+  类的行**（类名由 `:node-props` 按选项上的 `ownerTab` 标记下发，规则在
+  `web/src/styles.css`）。桌面侧栏与移动端抽屉共用同一条规则（两处都验）。
+- **图标用实心三点**（`EllipsisHorizontal`），不用 Outline 细线版：18px 下细线三点
+  几乎看不清，用户认不出这是"更多"；实心三点是这类菜单的通用形状。
+  触发键是 28px 的 `button`（比 18px 图标大，移动端好点），hover/focus 画出
+  底色与描边，`pinned` 时点亮为品牌色。
 - 触发键要 `stopPropagation`：否则点它会被 `n-menu` 当成"选中该项"而触发导航。
 - **勾选态必须画在 `label` 里**：`extra` 是 **`n-menu` 专有**字段，`n-dropdown`
   根本不读它 —— 写在 `extra` 上的对勾会**静默丢失**（不报错、类型检查也通过）。
-  由 `scripts/check-sidebar.mjs` 守卫。
+- 同一机制的另一面：**侧栏折叠成 64px 图标栏后，子项走的是 `n-dropdown` 弹层，
+  那里连「⋯」触发键本身都不渲染**（该弹层只列姓名链接，置顶入口只在展开态可用）。
+  这是既有取舍、不是回归；改这块时别误以为折叠态也该有触发键。
+- 以上各条由 `scripts/check-sidebar.mjs` 守卫（桌面侧栏 + 移动端抽屉两处都量）。
 
 ### 上传进度浮窗（全局，不属于某个路由）
 
@@ -602,6 +684,20 @@ API 地址解析优先级：**运行时 `/config.js` → 构建期 `HOST`（拼�
 | 文本类 | `<pre>` 纯文本转义 |
 | 音视频 | `<audio>` / `<video>`（依赖后端 Range） |
 | `.doc/.xls/.ppt` 旧格式、压缩包等 | 提示「该格式不支持在线预览，请下载后查看」 |
+| 超过 `preview_max_size_mb`（默认 20MB） | `kind=too-large`：提示「超过在线预览上限，请下载后查看」，**前端不去取内容**，下载仍可用 |
+
+预览体积闸的口径（详见 §7 的 `preview_max_size_mb`）：
+
+- 判定函数只有一个 —— `storage.PreviewKindFor(ext, sizeBytes, maxBytes)`，
+  **先判体积再判格式**：超限文件无论什么格式一律 `too-large`（对超大文件来说
+  "请下载"就是结论，不必再劝用户换格式）。
+- 登录预览与免登录分享**共用**它，两个 `/content` 接口也各自再判一次并降级为附件：
+  只在 `/preview` 的返回值里写 `kind` 是不够的 —— 用户可以直接请求 `/content`
+  （或拿一条旧链接），那样"限制"就只是一句提示，浏览器仍会去渲染超大文件。
+- 前端拿到 `too-large` 后**不请求内容**（这正是这道闸要防的事）：`PreviewView.vue`
+  把它与 `unsupported` / `legacy-office` 一样走"不下载、只提示 + 下载入口"的分支。
+- 上限配成 `0` 表示**不限制**（不是"一律不给预览"）：`PreviewSizeBytes() <= 0`
+  即放行，`TestPreviewLimitZeroMeansUnlimited` 守住这条语义。
 
 依赖体积控制：预览器一律 `defineAsyncComponent` + 动态 `import()`，主包不引入任何预览库。
 
