@@ -266,20 +266,24 @@ body {
 }
 
 /**
- * 侧栏「全部文件」父级自身被选中时的样子。
+ * 侧栏「全部文件」父级的文字。
+ *
+ * 它现在是**纯分组标题**（只负责展开/收起，点它不导航），因此不再需要
+ * 以前那条 `.all-files-link.is-current` 的选中态样式 —— 父级不进 n-menu 的
+ * value，永远不会有"被选中"的样子。这里只把它做成一个可点的分组名，
+ * 与子 tab 的姓名有层次差（子项比它更弱一档）。
+ *
  * 必须放全局样式：该节点由 MainLayout 的渲染函数产出、但挂在 n-menu 内部，
- * 组件的 scoped 属性覆盖不到它（同 PinToggle 的说明）。
- * n-menu 只认子项 key，父级 key 不在 value 里，所以选中态得自己给。
+ * 组件的 scoped 属性覆盖不到它（同下面的 .owner-menu-trigger）。
  */
-.all-files-link.is-current {
-  color: var(--color-primary);
-  font-weight: 650;
+.all-files-group {
+  font-weight: 600;
 }
 
 /* ---------- 用户子 tab 的「更多」触发键（贴行尾 + 实心三点）----------
  *
  * 必须放全局样式：节点由 MainLayout 的渲染函数产出、挂在 n-menu 内部，
- * 组件的 scoped 属性覆盖不到它（同上面的 .all-files-link）。
+ * 组件的 scoped 属性覆盖不到它（同上面的 .all-files-group）。
  *
  * 为什么要改位置：n-menu 把 extra 放在**标题单元格内部**，而那里的内容
  * 是「<a>姓名 + extra」的普通行内流 —— extra 只会紧跟在姓名后面。

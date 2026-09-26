@@ -84,7 +84,7 @@ async function onDownload() {
 /** 返回上一页；没有历史时回文件列表。 */
 function goBack() {
   if (window.history.length > 1) router.back()
-  else router.push('/files')
+  else router.push('/files/mine')
 }
 
 /**

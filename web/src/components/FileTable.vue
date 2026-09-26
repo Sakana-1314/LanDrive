@@ -71,7 +71,7 @@ const props = withDefaults(
     keyword?: string
     /** 搜索框占位文案 */
     searchPlaceholder?: string
-    /** 当前列表归属（选中的用户名 / 全部人员）；为空则不显示 */
+    /** 当前列表归属（选中的用户名等）；为空则不显示 */
     title?: string
   }>(),
   {

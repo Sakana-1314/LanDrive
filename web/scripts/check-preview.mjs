@@ -202,7 +202,10 @@ try {
   //     文本内容），断言它的正文出现在 iframe 里，才算真的打通了链路。
   await page.locator('.preview-close').click()
   await page.waitForTimeout(600)
-  await page.goto(`${BASE}/files`, { waitUntil: 'networkidle', timeout: 30000 })
+  // 去**文件所属的那个人**的目录里找它（mock 里 .csv 归 owner 3）。
+  // 不能再用 `/files`：不带 owner 的"全部人员混合视图"已下线，
+  // 该路径会重定向到 /files/mine，而这份 .csv 不在"我的文件"里。
+  await page.goto(`${BASE}/files?owner=3`, { waitUntil: 'networkidle', timeout: 30000 })
   await page.waitForTimeout(900)
   await page
     .locator('.desktop-only tbody tr', { hasText: '设备台账导出.csv' })

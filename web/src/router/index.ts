@@ -13,12 +13,20 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     component: () => import('@/layouts/MainLayout.vue'),
     children: [
-      { path: '', redirect: '/files' },
+      { path: '', redirect: '/files/mine' },
       {
+        // `/files` 只承载「按人查看」（`?owner=<id>`，侧栏子 tab 的落点）。
+        // 不带 owner 的"全部人员混合视图"已下线：所有人文件混在一页既不能上传、
+        // 也没有目录导航，信息量低又容易误操作。
+        //
+        // 用**重定向**而不是直接删掉这条路由：`/files` 是登录后的默认落点、
+        // 也散落在书签与预览页的返回逻辑里，删了会 404。重定向到
+        // `/files/mine`（带上原有 query，保住 `?folder=` 这类导航状态）。
         path: 'files',
         name: 'files',
         component: () => import('@/views/FilesView.vue'),
-        meta: { title: '全部文件' }
+        meta: { title: '全部文件' },
+        beforeEnter: (to) => (to.query.owner ? true : { path: '/files/mine', query: to.query })
       },
       {
         path: 'files/mine',
@@ -137,7 +145,7 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.admin && !isAdmin()) {
-    return { name: 'files' }
+    return { name: 'files-mine' }
   }
   return true
 })

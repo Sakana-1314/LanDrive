@@ -44,6 +44,8 @@ try {
 
 const PAGES = [
   '/login',
+  // `/files` 不带 owner 时会重定向到 /files/mine（混合视图已下线）：
+  // 留在这里是为了确认"重定向后的落地页"一样不出横向溢出。
   '/files',
   '/files/mine',
   // 子 tab 形态（菜单里选中某个用户的目录）

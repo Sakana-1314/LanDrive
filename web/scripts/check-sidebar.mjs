@@ -1,9 +1,13 @@
 // 侧栏用户子 tab 与置顶菜单的端到端回归（真实浏览器）。
 //
 // 守的是什么（用户需求）：
+//   0. 母 tab「全部文件」**不可点击导航**：它只是展开/收起的分组标题，
+//      内部没有链接、点它不改 URL（用户反馈"这个母 tab 怎么能点击呢"）；
 //   1. 用户子 tab **只显示姓名**，不显示「姓名 · 文件数」；
 //   2. 置顶不再是行内图钉按钮，而是收进「⋯」下拉菜单里的**勾选项**：
-//      未置顶时无对勾、已置顶时有对勾，点它能置顶/取消置顶并让顺序真的变。
+//      未置顶时无对勾、已置顶时有对勾，点它能置顶/取消置顶并让顺序真的变；
+//   3. 「更多」触发键**贴行尾**、图标是**实心三点**（细线版看不清、认不出是"更多"）；
+//      桌面侧栏与移动端抽屉两处都要成立。
 //
 // 为什么要真浏览器：
 //   - 「文案里有没有那个计数」是渲染结果，单测与类型检查都看不见；
@@ -138,8 +142,48 @@ try {
   page.on('pageerror', (e) => errs.push(e.message))
 
   await page.addInitScript(() => localStorage.setItem('lanfs-token', 'sidebar-check'))
-  await page.goto(`${BASE}/files`, { waitUntil: 'networkidle', timeout: 30000 })
+  // 用 /files/mine 作为入口（任何页面都能看到侧栏）。
+  // 不用 `/files`：不带 owner 时它现在会重定向（混合视图已下线），
+  // 测试依赖重定向反而掩盖了"侧栏本身是否正常"。
+  await page.goto(`${BASE}/files/mine`, { waitUntil: 'networkidle', timeout: 30000 })
   await page.waitForTimeout(1000)
+
+  // --- 0) 母 tab 必须是**纯展开/收起**，不能导航、不能是链接 ---
+  //
+  // 用户反馈的原话是"全部文件这个母 tab 怎么能点击呢"。守两层：
+  //   1. 它内部不能有 <a>（有 <a> 就会跳转，也说明又被当成了导航项）；
+  //   2. 点它不能改 URL —— 只该收起/展开子 tab。
+  const parentSel = '.n-layout-sider .n-menu-item'
+  const parentRow = page.locator(parentSel, { hasText: '全部文件' }).first()
+  check(
+    (await parentRow.locator('a').count()) === 0,
+    '母 tab「全部文件」内部不该有链接（它应只是展开/收起的分组标题）'
+  )
+  const beforeClick = await page.evaluate(() => ({
+    url: location.pathname + location.search,
+    kids: document.querySelectorAll('.n-layout-sider .n-submenu-children .n-menu-item').length
+  }))
+  await parentRow.locator('.n-menu-item-content-header').first().click()
+  await page.waitForTimeout(800)
+  const afterClick = await page.evaluate(() => ({
+    url: location.pathname + location.search,
+    kids: document.querySelectorAll('.n-layout-sider .n-submenu-children .n-menu-item').length
+  }))
+  check(
+    afterClick.url === beforeClick.url,
+    `点母 tab 不应导航，实际 ${beforeClick.url} → ${afterClick.url}`
+  )
+  check(
+    beforeClick.kids !== afterClick.kids,
+    `点母 tab 应展开/收起子 tab，实际子项数没变（${beforeClick.kids}）`
+  )
+  // 展开回来，后续用例要继续看子 tab
+  await parentRow.locator('.n-menu-item-content-header').first().click()
+  await page.waitForTimeout(800)
+  check(
+    (await page.locator('.n-layout-sider .n-submenu-children .n-menu-item').count()) > 0,
+    '再次点母 tab 后子 tab 没有展开回来'
+  )
 
   // --- 1) 子 tab 只显示姓名，不带文件数 ---
   const labels = await page.evaluate(TAB_LABELS)
@@ -370,4 +414,4 @@ if (failures) {
   for (const p of problems) console.error(`   - ${p}`)
   process.exit(1)
 }
-console.log('✅ 侧栏检查通过：子 tab 只显示姓名，「⋯」下拉里勾选置顶且顺序真的变')
+console.log('✅ 侧栏检查通过：母 tab 只展开不导航，子 tab 只显示姓名，「⋯」贴行尾且是实心三点，下拉里勾选置顶且顺序真的变')

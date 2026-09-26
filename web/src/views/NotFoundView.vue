@@ -15,7 +15,7 @@ const router = useRouter()
       </div>
       <div class="nf-code">404</div>
       <p class="nf-text">这个地址不存在</p>
-      <n-button type="primary" @click="router.push('/files')">返回文件列表</n-button>
+      <n-button type="primary" @click="router.push('/files/mine')">返回文件列表</n-button>
     </div>
   </div>
 </template>

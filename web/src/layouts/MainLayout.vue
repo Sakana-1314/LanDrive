@@ -185,13 +185,14 @@ const OwnerMenu = defineComponent({
   }
 })
 
-// 「全部文件」是父级 tab：它自身就是"看所有人的文件"，展开后按人列出子 tab ——
-// 想找谁的文件直接点，不必先进入列表再筛选。
+// 「全部文件」是分组标题：展开后按人列出子 tab —— 想找谁的文件直接点，
+// 不必先进入列表再筛选。
 //
 // 两个取舍：
-//   - 不再单独放一个「全部人员」子项：父级已经是这个入口，重复一项只是多一次点击；
+//   - 父级自己**不导航**（只展开/收起，详见下面 groupLabel 的说明）：
+//     混合视图下线后，"看所有人的文件"不再是入口，母 tab 就纯粹是个分组名；
 //   - 名下没有文件的账号不列出（列出也只会点进空列表），
-//     因此一个人都没有文件时父级退化成普通链接，不显示可展开的空子菜单。
+//     因此一个人都没有文件时连这个分组都不渲染。
 const menuOptions = computed<MenuOption[]>(() => {
   const withFiles = ownersState.items.filter((o) => o.file_count > 0)
   const children: MenuOption[] = withFiles.map((o) => ({
@@ -209,20 +210,17 @@ const menuOptions = computed<MenuOption[]>(() => {
     ownerTab: true
   }))
 
-  const allFilesLink = () =>
-    h(
-      RouterLink,
-      {
-        to: '/files',
-        class: ['all-files-link', { 'is-current': route.path === '/files' && !route.query.owner }],
-        // 父级同时要"可点进去看全部"和"可展开"：n-menu 默认把父级的点击
-        // 当成展开/收起，于是点它永远回不到"全部文件"。
-        // 这里让 label 只负责导航（拦住冒泡，避免又被当成展开）；
-        // 展开/收起交给右侧的箭头（n-menu 自己渲染）。
-        onClick: (e: MouseEvent) => e.stopPropagation()
-      },
-      { default: () => '全部文件' }
-    )
+  // 「全部文件」是**纯父级**：它只负责展开/收起名下的用户子 tab，自己不可点导航。
+  //
+  // 为什么要改掉原来的"既能展开、又能点进去看全部人员"：
+  // 同一个控件承担两个动作时，用户点下去的预期是不确定的 —— 想展开的人被带走了，
+  // 想进列表的人又不知道该点箭头还是点文字。现在它就是个分组标题：
+  // 点整行 = 展开/收起（n-menu 的默认行为，不必再拦冒泡）。
+  //
+  // 那"看所有人的文件"去哪了？—— 该视图已下线（见 docs/design.md）：
+  // 它把所有人的文件混在一页，既不能上传也没有目录导航，实际是个信息量很低
+  // 且容易误操作的页面。要找人就直接点他的子 tab。
+  const groupLabel = () => h('span', { class: 'all-files-group' }, '全部文件')
 
   const opts: MenuOption[] = [
     {
@@ -235,22 +233,19 @@ const menuOptions = computed<MenuOption[]>(() => {
       label: () => h(RouterLink, { to: '/shares' }, { default: () => '分享管理' }),
       key: '/shares',
       icon: renderIcon(LinkOutline)
-    },
-    children.length
-      ? {
-          // 有子项时才可展开；父级本身也能点，用来查看所有人的文件
-          label: allFilesLink,
-          key: 'files-group',
-          icon: renderIcon(FolderOpenOutline),
-          children
-        }
-      : {
-          // 没有任何人上传过文件：退化成普通链接，避免展开出空菜单
-          label: allFilesLink,
-          key: '/files',
-          icon: renderIcon(FolderOpenOutline)
-        }
+    }
   ]
+
+  // 有用户子 tab 时才插入这个分组。一个人都没上传过文件时不插：
+  // 一个展开后空无一物的父级、或点了没反应的分组标题，比没有更糟。
+  if (children.length) {
+    opts.push({
+      label: groupLabel,
+      key: 'files-group',
+      icon: renderIcon(FolderOpenOutline),
+      children
+    })
+  }
   if (isAdmin()) {
     opts.push(
       { type: 'divider', key: 'd1' },
@@ -279,16 +274,16 @@ const menuOptions = computed<MenuOption[]>(() => {
   return opts
 })
 
-// 子项 key 形如 /files?owner=<id>，因此选中态要带查询串；
-// 管理员页面则直接用路径。
+// 子项 key 形如 /files?owner=<id>，因此选中态要带查询串；管理员页面则直接用路径。
+//
+// 父级（files-group）**不进** value：它不再是可导航项，选中态只该落在某个子 tab 上。
+// 不指定 owner 时（不该出现，路由会把无 owner 的 /files 重定向到 /files/mine）
+// 返回空串，什么也不高亮，而不是错误地高亮父级或某一个具体的人。
 const activeKey = computed(() => {
   if (route.path.startsWith('/admin/')) return route.path
   if (route.path === '/files') {
     const owner = route.query.owner
-    if (owner) return `/files?owner=${owner}`
-    // 有子项时父级的 key 是 files-group（父级本身就是"看所有人的文件"），
-    // 没有子项时父级退化成普通项、key 为 /files。
-    return ownersState.items.some((o) => o.file_count > 0) ? 'files-group' : '/files'
+    return owner ? `/files?owner=${owner}` : ''
   }
   return route.path
 })
