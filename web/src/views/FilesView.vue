@@ -64,21 +64,28 @@ const folderId = computed(() => {
 })
 
 /**
- * 目录导航只在**明确看某个人的目录**时提供。
+ * 目录导航始终可用（不再有条件）。
  *
- * 「全部人员」是跨人的混合视图，把所有人的同名文件夹混在一起没有意义；
- * 管理员也一样先选人再看目录。
+ * 以前只在"明确看某个人"时才启用，因为无 owner 的混合视图把所有人的同名
+ * 文件夹混在一起没有意义。混合视图下线后，本页要么是「我的文件」、
+ * 要么是某个人的目录，两种情况归属都明确，目录导航一直有意义；
+ * 因此这里不再保留一个恒为 true 的开关，直接在模板里渲染工具条。
  */
-const folderNavEnabled = computed(() => scope.value === 'mine' || ownerId.value !== null)
 
 /** 目录归属谁：我的文件→自己；看某人→那个人。 */
 const navOwnerId = computed(() => (scope.value === 'mine' ? 0 : ownerId.value || 0))
 
+/**
+ * 当前列表归属的显示名。
+ *
+ * 兜底不再叫「全部人员」：那个概念随混合视图一起下线了，再显示它会让用户
+ * 以为还有这样一个页面。查不到人（owners 未加载完 / id 不存在）时，
+ * 退化成中性的「该用户」，不承诺一个不存在的视图。
+ */
 const ownerLabel = computed(() => {
   if (scope.value === 'mine') return '我的文件'
-  if (ownerId.value === null) return '全部人员'
   const hit = ownersState.items.find((o) => o.user_id === ownerId.value)
-  return hit ? hit.name : '全部人员'
+  return hit ? hit.name : '该用户'
 })
 
 const items = ref<FileItem[]>([])
@@ -95,11 +102,6 @@ const breadcrumb = ref<Folder[]>([])
 const foldersLoading = ref(false)
 
 async function loadFolders() {
-  if (!folderNavEnabled.value) {
-    folders.value = []
-    breadcrumb.value = []
-    return
-  }
   foldersLoading.value = true
   try {
     const res = await listFolders({ owner_id: navOwnerId.value, folder_id: folderId.value })
@@ -118,9 +120,10 @@ async function load() {
     const res = await listFiles({
       scope: scope.value,
       owner_id: scope.value === 'mine' ? undefined : ownerId.value || undefined,
-      // 目录过滤只在提供目录导航时生效；「全部人员」视图保持原有的跨人混合
-      folder_id: folderNavEnabled.value && folderId.value > 0 ? folderId.value : undefined,
-      folder_root: folderNavEnabled.value && folderId.value === 0 ? true : undefined,
+      // 目录过滤始终生效：本页总是有明确归属（我的 / 某人的），
+      // folder_id=0 时用 folder_root 表达"只看根目录这一层"。
+      folder_id: folderId.value > 0 ? folderId.value : undefined,
+      folder_root: folderId.value === 0 ? true : undefined,
       q: keyword.value.trim() || undefined,
       page: page.value,
       page_size: pageSize.value,
@@ -139,6 +142,8 @@ async function load() {
 function reload() {
   load()
   loadFolders()
+  // 看某人时刷新用户目录：置顶/改名/文件数变化后，菜单与标题都要跟着更新
+  // （副作用是顺带刷新了侧栏子 tab 的姓名，避免"标题显示旧名字"）。
   if (scope.value === 'all') loadOwners(true).catch(() => {})
 }
 
@@ -318,7 +323,7 @@ onMounted(() => {
   <div class="files-page">
     <n-card class="card-surface files-card" :bordered="false">
       <!-- 目录工具条：左=面包屑（筛选/定位），右=按钮（上传、新建文件夹） -->
-      <div v-if="folderNavEnabled" class="folder-bar">
+      <div class="folder-bar">
         <div class="crumbs">
           <button class="crumb" type="button" @click="goToBreadcrumb(null)">
             <n-icon :size="14"><home-outline /></n-icon>
@@ -383,6 +388,11 @@ onMounted(() => {
         与表格内的「暂无文件」同时渲染，页面上就出现了两遍空提示。
       -->
 
+      <!--
+        不显示上传者列（show-owner=false）：本页要么是「我的文件」、
+        要么是**某一个**人的目录，整列都是同一个人，纯属重复信息。
+        混合视图下线后这列就没有意义了（以前跨人混排时它才用于区分"这是谁传的"）。
+      -->
       <FileTable
         v-model:keyword="keyword"
         :title="scope === 'all' ? ownerLabel : ''"
@@ -391,7 +401,7 @@ onMounted(() => {
         :folder-editable="scope === 'mine'"
         :loading="loading"
         :total="total"
-        :show-owner="scope === 'all'"
+        :show-owner="false"
         :page="page"
         :page-size="pageSize"
         @update:page="(v: number) => (page = v)"

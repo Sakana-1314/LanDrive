@@ -67,7 +67,9 @@ async function onSubmit() {
     } catch {
       /* 策略拉取失败不阻塞登录 */
     }
-    const redirect = (route.query.redirect as string) || '/files'
+    // 登录后的落点：优先回跳原地址（守卫带过来的 ?redirect=），
+    // 否则进「我的文件」——「全部人员混合视图」已下线，/files 只是按人查看的容器。
+    const redirect = (route.query.redirect as string) || '/files/mine'
     router.replace(redirect)
   } catch (e) {
     failure.value = errMsg(e)
