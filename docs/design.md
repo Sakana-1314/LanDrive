@@ -272,13 +272,40 @@ DDL 只用 MySQL 8.0 与 MariaDB 11 都支持的标准语法：不使用 JSON �
   所以返回受影响文件数、不写 folders 表。范围用 `rel_path` 前缀匹配，
   与"统计该目录下有多少文件"同一套算法，口径天然一致。
 - **配额是全站共享的一个池**，计数口径是"所有 `active` 且 `expires_at IS NULL` 文件的
-  `size_bytes` 之和"。**刻意不含回收站里的永久文件**：那些已设 `purge_at`、几天内必被清掉，
-  算进来会让"删文件"这个唯一的自救手段不释放额度。代价是删掉到彻底清理之间额度不释放，
-  放大倍数受 `trash_days` 约束、不会无限增长。
+  `size_bytes` 之和"。**刻意不含回收站里的永久文件**：算进来会让"删文件"这个唯一的自救
+  手段不释放额度（额度满时用户就完全没出路了）。
+  已知代价（如实记下来）：**属主删单个文件**会设 `purge_at`，到点后磁盘被回收，所以那部分
+  释放是临时的；但**删目录**进回收站的文件 `purge_at` 是 `NULL`（`store.SoftDeleteFilesUnderPath`
+  的既有行为，与"属主主动删除"那条 SQL 不一致），而 `ListPurgeable` 要求 `purge_at` 非空 ——
+  这些行永远不会被自动清理。于是"删目录"能释放额度却不释放磁盘，这层放大不会自行收敛。
+  要修的是删目录那条既有 SQL，不属本次范围，已记入 `todo.md` 待办。
 - 鉴权：属主或管理员（与改名/删除同一套 `checkCanModify`）；只对 **active** 文件开放 ——
   回收站里的文件先恢复再说，否则设了永久也马上会被清理掉。
+  ⚠️ `checkCanModify` 对管理员**直接放行**（管理员要能打理回收站），所以这条不能只靠它守，
+  服务层必须自己再判一次 `status`，否则管理员能给回收站里的文件设永久：它不计入配额
+  （配额只算 active），恢复之后却突然变成永久 —— 由 `TestPermanentQuotaEdgeCases` 守卫。
+- 配额校验是"读已用 → 判定 → 单条 UPDATE"，**没有事务也没有行锁**：并发下两个请求可能
+  一起通过、略微超出上限。它是业务闸而不是安全边界，所以没有为此把写入串行化；
+  真要卡死得改成条件 UPDATE 或 `SELECT … FOR UPDATE`。
+- 配额不足的提示要写明**本次涉及几个文件**（目录级用 `PermanentizableStats` 的真实计数）。
+  写死成 1 的话，200 个文件的目录被拒时会告诉用户"涉及 1 个文件"，与他要清理的范围对不上。
+- 单文件设永久的字节数**只算"还不是永久"的那些**：已是永久的不再重复计入新增占用，
+  否则对同一个文件重发一次（超时重试、双标签页）就会被 409 拒掉 —— PUT 应当幂等。
 - 超配额返回 **409**（与当前服务端状态冲突，清点东西再试即可），
   错误文案带「已用 / 上限 / 还需多少」，用户可直接照做；配额为 0（功能关闭）返回 **403**。
+
+#### 回滚注意（0004 迁移不可逆）
+
+`0004` 只把 `files.expires_at` 由 `NOT NULL` 改成可空，**没有回滚脚本**。要退回旧版
+server 镜像（AGENTS.md §9 的 `images-before.txt` 那套流程）**必须先补数据**：
+
+```sql
+UPDATE files SET expires_at = NOW() + INTERVAL <retention_days> DAY WHERE expires_at IS NULL;
+```
+
+原因是旧代码把该列直接 `Scan` 进 `time.Time`（不是 `sql.NullTime`），遇到 NULL 会让
+**所有**走 `scanFile` 的接口整体 500 —— 文件列表、详情、预览、分享解析全都受影响，
+不是"跳过一个文件"那么轻。补完之后该列不再有 NULL，旧代码即可正常读。
 
 ### 定时任务
 
@@ -696,8 +723,9 @@ API 地址解析优先级：**运行时 `/config.js` → 构建期 `HOST`（拼�
   （或拿一条旧链接），那样"限制"就只是一句提示，浏览器仍会去渲染超大文件。
 - 前端拿到 `too-large` 后**不请求内容**（这正是这道闸要防的事）：`PreviewView.vue`
   把它与 `unsupported` / `legacy-office` 一样走"不下载、只提示 + 下载入口"的分支。
-- 上限配成 `0` 表示**不限制**（不是"一律不给预览"）：`PreviewSizeBytes() <= 0`
-  即放行，`TestPreviewLimitZeroMeansUnlimited` 守住这条语义。
+- 上限配成 `0` 表示**不限制**（不是"一律不给预览"）：`Values.PreviewMaxSizeBytes() <= 0`
+  即放行（判定集中在 `Values.PreviewSizeAllowed`），`TestPreviewLimitZeroMeansUnlimited`
+  守住这条语义。
 
 依赖体积控制：预览器一律 `defineAsyncComponent` + 动态 `import()`，主包不引入任何预览库。
 
