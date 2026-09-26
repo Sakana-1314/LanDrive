@@ -25,7 +25,7 @@ const routes: RouteRecordRaw[] = [
         path: 'files',
         name: 'files',
         component: () => import('@/views/FilesView.vue'),
-        meta: { title: '全部文件' },
+        meta: { title: '按人查看' },
         beforeEnter: (to) => (to.query.owner ? true : { path: '/files/mine', query: to.query })
       },
       {
