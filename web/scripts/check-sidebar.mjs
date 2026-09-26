@@ -170,6 +170,68 @@ try {
     `子 tab 右侧应是「更多」下拉触发键，实际 title = ${JSON.stringify(titles)}`
   )
 
+  // --- 2b) 触发键必须**贴行尾**，而且是**实心三点** ---
+  //
+  // 为什么这两条也要真浏览器：位置是布局算出来的（grid/flex 谁吃掉剩余空间），
+  // 图标实心还是细线要看渲染出来的 SVG 形状 —— 静态检查一个都看不见。
+  // 曾经的实际观感：208px 侧栏里触发键落在 x≈64~83（紧跟姓名），
+  // 而行内容区一直铺到 x=190，看着像"粘在名字上"，不像行尾的操作入口。
+  const geometry = await page.evaluate(() =>
+    [...document.querySelectorAll('.n-layout-sider .n-menu-item')]
+      .filter((row) => row.querySelector('.n-menu-item-content-header__extra'))
+      .map((row) => {
+        const trigger = row.querySelector('.owner-menu-trigger')
+        const header = row.querySelector('.n-menu-item-content-header')
+        const name = row.querySelector('.n-menu-item-content-header a')
+        const t = trigger?.getBoundingClientRect()
+        const h = header?.getBoundingClientRect()
+        const n = name?.getBoundingClientRect()
+        return {
+          name: name?.innerText.trim(),
+          // 触发键右缘距行右缘的空隙，以及它是否真的落在姓名右边一大截之后
+          gapToRowRight: t && h ? Math.round(h.right - t.right) : null,
+          triggerLeft: t ? Math.round(t.left) : null,
+          nameRight: n ? Math.round(n.right) : null,
+          // 触发键自身的宽度：用来确认触控目标比图标大（不是个 18px 的裸图标）
+          triggerW: t ? Math.round(t.width) : null,
+          circles: trigger
+            ? [...trigger.querySelectorAll('svg circle')].map((c) => ({
+                cx: c.getAttribute('cx'),
+                r: Number(c.getAttribute('r')),
+                fill: c.getAttribute('fill')
+              }))
+            : []
+        }
+      })
+  )
+  check(geometry.length === 3, `应能量到 3 个用户子 tab 的触发键，实际 ${geometry.length}`)
+  for (const g of geometry) {
+    // 贴行尾：右缘与标题区右缘基本齐平（允许 2px 的亚像素差）
+    check(
+      g.gapToRowRight !== null && g.gapToRowRight <= 2,
+      `${g.name} 的「更多」触发键没有靠右：距行右缘还有 ${g.gapToRowRight}px`
+    )
+    // 别退化成"紧跟在姓名后面"（那正是要修掉的样子）
+    check(
+      g.triggerLeft !== null && g.nameRight !== null && g.triggerLeft - g.nameRight > 20,
+      `${g.name} 的「更多」触发键紧跟在姓名后面（姓名右缘 ${g.nameRight}、触发键左缘 ${g.triggerLeft}），没有靠右`
+    )
+    // 实心三点：3 个圆，且圆点用 currentColor 实心填充（Outline 版是 fill:none + stroke）
+    check(
+      g.circles.length === 3,
+      `${g.name} 的「更多」图标应是三个点，实际 ${g.circles.length} 个圆`
+    )
+    check(
+      g.circles.every((c) => c.fill === 'currentColor' && c.r >= 40),
+      `${g.name} 的「更多」图标应是**实心**三点（细线 Outline 版太小看不清），实际 ${JSON.stringify(g.circles)}`
+    )
+    // 触控目标：28px 的按钮，比 18px 图标大
+    check(
+      g.triggerW !== null && g.triggerW >= 24,
+      `${g.name} 的「更多」触发键触控目标偏小：宽 ${g.triggerW}px`
+    )
+  }
+
   const order = () => page.evaluate(TAB_LABELS)
   // 王强（mock 里未置顶）→ 用它验置顶/取消
   const row = page.locator('.n-layout-sider .n-menu-item', { hasText: '王强' })
@@ -233,6 +295,71 @@ try {
 
   check(errs.length === 0, `页面有 JS 运行时错误：${errs.slice(0, 2).join(' | ')}`)
   await ctx.close()
+
+  // --- 5) 移动端抽屉里同样是「贴行尾的实心三点」---
+  // 侧栏与抽屉是两处独立的 n-menu（同一份 options），只验侧栏会漏掉抽屉 ——
+  // 改布局时最容易只对一处生效。
+  const mctx = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const mpage = await mctx.newPage()
+  const merrs = []
+  mpage.on('pageerror', (e) => merrs.push(e.message))
+  await mpage.addInitScript(() => localStorage.setItem('lanfs-token', 'sidebar-check-mobile'))
+  await mpage.goto(`${BASE}/files/mine`, { waitUntil: 'networkidle', timeout: 30000 })
+  await mpage.waitForTimeout(800)
+  // 打开抽屉导航
+  await mpage.locator('.topbar .icon-button').first().click()
+  await mpage.waitForTimeout(900)
+
+  const mobileGeometry = await mpage.evaluate(() =>
+    [...document.querySelectorAll('.n-drawer .n-menu-item')]
+      .filter((row) => row.querySelector('.n-menu-item-content-header__extra'))
+      .map((row) => {
+        const trigger = row.querySelector('.owner-menu-trigger')
+        const header = row.querySelector('.n-menu-item-content-header')
+        const name = row.querySelector('.n-menu-item-content-header a')
+        const t = trigger?.getBoundingClientRect()
+        const h = header?.getBoundingClientRect()
+        const n = name?.getBoundingClientRect()
+        return {
+          name: name?.innerText.trim(),
+          gapToRowRight: t && h ? Math.round(h.right - t.right) : null,
+          triggerLeft: t ? Math.round(t.left) : null,
+          nameRight: n ? Math.round(n.right) : null,
+          w: t ? Math.round(t.width) : null,
+          circles: trigger ? trigger.querySelectorAll('svg circle').length : 0,
+          solid: trigger
+            ? [...trigger.querySelectorAll('svg circle')].every((c) => c.getAttribute('fill') === 'currentColor')
+            : false,
+          // 抽屉里不该出现横向溢出（触发键被顶出可视区就是这种症状）
+          overflowX: (() => {
+            const menu = row.closest('.n-menu')
+            return menu ? menu.scrollWidth > menu.clientWidth + 1 : null
+          })()
+        }
+      })
+  )
+  check(mobileGeometry.length > 0, '移动端抽屉里没有渲染出用户子 tab')
+  for (const g of mobileGeometry) {
+    check(
+      g.gapToRowRight !== null && g.gapToRowRight <= 2,
+      `移动端抽屉 ${g.name} 的「更多」触发键没有靠右：距行右缘 ${g.gapToRowRight}px`
+    )
+    check(
+      g.triggerLeft !== null && g.nameRight !== null && g.triggerLeft - g.nameRight > 20,
+      `移动端抽屉 ${g.name} 的「更多」触发键紧跟在姓名后面，没有靠右`
+    )
+    check(
+      g.circles === 3 && g.solid,
+      `移动端抽屉 ${g.name} 的「更多」图标应是实心三点，实际 ${g.circles} 个圆（实心=${g.solid}）`
+    )
+    check(
+      g.w !== null && g.w >= 24,
+      `移动端抽屉 ${g.name} 的「更多」触发键触控目标偏小：宽 ${g.w}px`
+    )
+    check(g.overflowX === false, `移动端抽屉 ${g.name} 一行出现横向溢出（触发键被顶出可视区）`)
+  }
+  check(merrs.length === 0, `移动端页面有 JS 运行时错误：${merrs.slice(0, 2).join(' | ')}`)
+  await mctx.close()
 } finally {
   await browser.close()
   stopAll()
