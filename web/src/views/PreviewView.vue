@@ -46,8 +46,9 @@ async function load() {
   try {
     const meta = await getPreviewInfo(id.value)
     info.value = meta
-    // 不支持的类型不必下载内容，直接提示。
-    if (meta.kind === 'unsupported' || meta.kind === 'legacy-office') {
+    // 不能预览的类型不必下载内容，直接提示：超限的文件连"下载到内存"这一步
+    // 都要避免（这正是体积闸要防的事），只在用户点「下载文件」时才去取。
+    if (meta.kind === 'unsupported' || meta.kind === 'legacy-office' || meta.kind === 'too-large') {
       loading.value = false
       return
     }
@@ -155,7 +156,10 @@ const TextPreview = defineAsyncComponent(() => import('@/components/preview/Text
     </n-result>
 
     <div
-      v-else-if="info && (info.kind === 'unsupported' || info.kind === 'legacy-office')"
+      v-else-if="
+        info &&
+        (info.kind === 'unsupported' || info.kind === 'legacy-office' || info.kind === 'too-large')
+      "
       class="preview-state"
     >
       <n-empty :description="info.note || '该格式不支持在线预览'">

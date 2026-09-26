@@ -373,6 +373,45 @@ try {
   )
   await mobile.close()
 
+  // --- 9) 可预览文件大小限制（默认 20MB）：超限不给在线预览，但仍可下载 ---
+  //
+  // 为什么要真浏览器：这是"前端拿到 kind=too-large 后有没有走对分支"的渲染结果 ——
+  // 单测与类型检查都看不见。超限时**绝不能**再去取文件内容：那道闸要防的
+  // 正是"把超大文件读进浏览器"，如果前端照旧拉 blob，限制就形同虚设。
+  const limit = await ctx.newPage()
+  const limitErrs = []
+  limit.on('pageerror', (e) => limitErrs.push(e.message))
+  // 记录这个页面发起的 /content 请求：超限文件一个都不该有
+  const contentHits = []
+  limit.on('request', (r) => {
+    if (/\/api\/files\/\d+\/content/.test(r.url())) contentHits.push(r.url())
+  })
+  await limit.addInitScript(() => localStorage.setItem('lanfs-token', 'preview-check'))
+  // mock 里 id=100 是 30MB 的 .mp4（> 默认 20MB 上限）
+  await limit.goto(`${BASE}/preview/100?embed=1`, { waitUntil: 'networkidle', timeout: 30000 })
+  await limit.waitForTimeout(1200)
+  const tooLarge = await limit.evaluate(() => {
+    const page_ = document.querySelector('.preview-page')
+    const state = page_?.querySelector('.preview-state')
+    return {
+      text: state ? state.innerText.replace(/\s+/g, ' ').trim() : '',
+      hasStage: !!page_?.querySelector('.preview-stage'),
+      hasFrame: !!page_?.querySelector('iframe')
+    }
+  })
+  check(
+    /上限/.test(tooLarge.text) && /下载/.test(tooLarge.text),
+    `超限文件应给出「超过上限、请下载」的说明，实际文案「${tooLarge.text}」`
+  )
+  check(!tooLarge.hasStage, '超限文件不应渲染预览舞台（说明前端仍走了渲染分支）')
+  check(!tooLarge.hasFrame, '超限文件不应渲染 iframe（说明前端仍走了内联分支）')
+  check(
+    contentHits.length === 0,
+    `超限文件不应请求 /content（限制要防的正是把大文件读进浏览器），实际请求了 ${JSON.stringify(contentHits)}`
+  )
+  check(limitErrs.length === 0, `超限预览页有 JS 运行时错误：${limitErrs.slice(0, 2).join(' | ')}`)
+  await limit.close()
+
   await ctx.close()
 } finally {
   await browser.close()

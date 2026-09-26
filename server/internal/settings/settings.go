@@ -23,15 +23,20 @@ const (
 	KeyTrashDays         = "trash_days"
 	KeyChunkSizeMB       = "chunk_size_mb"
 	KeyUploadEnabled     = "upload_enabled"
+	KeyPreviewMaxSizeMB  = "preview_max_size_mb"
+	KeyPermanentQuotaMB  = "permanent_quota_mb"
 )
 
 // 默认值。
 const (
-	DefMaxFileSizeMB = 500
-	DefRetentionDays = 15
-	DefTrashDays     = 7
-	DefChunkSizeMB   = 4
-	DefUploadEnabled = true
+	DefMaxFileSizeMB    = 500
+	DefRetentionDays    = 15
+	DefTrashDays        = 7
+	DefChunkSizeMB      = 4
+	DefUploadEnabled    = true
+	DefPreviewMaxSizeMB = 20
+	// 永久空间默认 100GB。这是**全站共享**的一个池（见 PermanentQuotaMB 的说明）。
+	DefPermanentQuotaMB = 102400
 )
 
 // 取值边界。
@@ -44,6 +49,15 @@ const (
 	MaxTrashDay     = 365
 	MinChunkSizeMB  = 1
 	MaxChunkSizeMB  = 64
+	// 预览上限允许 0：表示"不限制预览体积"，
+	// 有人确实愿意让浏览器去扛大文件，给一个明确的关闭档比逼着他填个大数好。
+	MinPreviewMaxSizeMB = 0
+	MaxPreviewMaxSizeMB = 102400 // 100 GB
+	// 永久配额允许 0：表示**关闭**"设为永久"这个功能（一律按保留天数到期）。
+	// 这比填个极小的值更明确 —— 填 1MB 会让人以为是"额度很小"，
+	// 而 0 表达的是"不打算给永久空间"。
+	MinPermanentQuotaMB = 0
+	MaxPermanentQuotaMB = 104857600 // 100 TB
 )
 
 // SettingsErr 表示配置校验失败（handler 映射为 400）。
@@ -63,6 +77,25 @@ type Values struct {
 	TrashDays         int    `json:"trash_days"`
 	ChunkSizeMB       int    `json:"chunk_size_mb"`
 	UploadEnabled     bool   `json:"upload_enabled"`
+	// PreviewMaxSizeMB 是**在线预览**的体积上限（MB）。0 表示不限制。
+	//
+	// 与 MaxFileSizeMB 是两件事：前者约束"能不能传进来"，这个约束
+	// "要不要在浏览器里渲染"。预览要把整个文件读进内存（docx/xlsx/pptx 还要
+	// 交给纯前端库解析），远超体积的文件会把标签页拖死，因此单独设一道闸；
+	// **下载不受它影响** —— 大文件下下来本地看完全没问题。
+	PreviewMaxSizeMB int `json:"preview_max_size_mb"`
+	// PermanentQuotaMB 是**全站共享**的「永久文件」体积上限（MB）。0 表示关闭永久功能。
+	//
+	// 为什么是全站一个池而不是每人一份：永久文件永远不会被自动清理，
+	// 每人一份的话"总量"随人数无限增长，磁盘迟早被撑爆 —— 而这道闸的意义
+	// 正是给"永不清理"这件事封一个可预期的上限。全站共享让实际占用一眼可见。
+	//
+	// 计数口径：所有 **active 且 expires_at IS NULL** 的文件的 size_bytes 之和。
+	// 刻意**不**把回收站里的永久文件算进来：那些已经设了 purge_at、几天内必被清掉，
+	// 而"删掉文件却不释放额度"会让用户完全无法自救（这正是额度满时唯一的出路）。
+	// 代价是存在一个有限的放大：删掉的永久文件在回收站里仍占几天磁盘，
+	// 期间可以再设新的永久文件。放大倍数受 trash_days 约束、不会无限增长。
+	PermanentQuotaMB int `json:"permanent_quota_mb"`
 }
 
 // MaxFileSizeBytes 单文件体积上限（字节）。
@@ -70,6 +103,37 @@ func (v Values) MaxFileSizeBytes() int64 { return int64(v.MaxFileSizeMB) << 20 }
 
 // ChunkSizeBytes 分片大小（字节）。
 func (v Values) ChunkSizeBytes() int64 { return int64(v.ChunkSizeMB) << 20 }
+
+// PreviewMaxSizeBytes 预览体积上限（字节）。0 表示不限制。
+func (v Values) PreviewMaxSizeBytes() int64 { return int64(v.PreviewMaxSizeMB) << 20 }
+
+// PreviewSizeAllowed 报告某个体积的文件是否允许在线预览。
+// 上限配成 0 时视为不限制（管理员显式关闭了这道闸）。
+func (v Values) PreviewSizeAllowed(sizeBytes int64) bool {
+	max := v.PreviewMaxSizeBytes()
+	return max <= 0 || sizeBytes <= max
+}
+
+// PermanentQuotaBytes 永久空间上限（字节）。0 表示永久功能被关闭。
+func (v Values) PermanentQuotaBytes() int64 { return int64(v.PermanentQuotaMB) << 20 }
+
+// PermanentEnabled 报告是否开放「设为永久」。配额配成 0 即关闭该功能。
+func (v Values) PermanentEnabled() bool { return v.PermanentQuotaMB > 0 }
+
+// PermanentFits 报告在已用 usedBytes 的基础上再永久化 addBytes 是否放得下。
+// 配额关闭（0）时恒为 false —— 关闭状态下没有任何文件能被设为永久。
+//
+// 用减法而不是加法比较，避免 usedBytes+addBytes 在极端值下溢出 int64。
+func (v Values) PermanentFits(usedBytes, addBytes int64) bool {
+	if !v.PermanentEnabled() {
+		return false
+	}
+	quota := v.PermanentQuotaBytes()
+	if usedBytes > quota {
+		return false
+	}
+	return addBytes <= quota-usedBytes
+}
 
 // ExtList 返回规范化后的允许扩展名列表（小写、带点、去重、已排序）。
 // 空列表表示允许全部。
@@ -145,12 +209,15 @@ type Patch struct {
 	TrashDays         *int
 	ChunkSizeMB       *int
 	UploadEnabled     *bool
+	PreviewMaxSizeMB  *int
+	PermanentQuotaMB  *int
 }
 
 // Empty 报告该补丁是否未包含任何字段。
 func (p Patch) Empty() bool {
 	return p.MaxFileSizeMB == nil && p.AllowedExtensions == nil && p.RetentionDays == nil &&
-		p.TrashDays == nil && p.ChunkSizeMB == nil && p.UploadEnabled == nil
+		p.TrashDays == nil && p.ChunkSizeMB == nil && p.UploadEnabled == nil &&
+		p.PreviewMaxSizeMB == nil && p.PermanentQuotaMB == nil
 }
 
 // Update 校验并持久化补丁，成功后立即刷新缓存。返回更新后的配置。
@@ -192,6 +259,21 @@ func (s *Service) Update(ctx context.Context, p Patch) (Values, error) {
 	if p.UploadEnabled != nil {
 		next.UploadEnabled = *p.UploadEnabled
 	}
+	if p.PreviewMaxSizeMB != nil {
+		if err := checkRange("可预览文件上限(MB)", *p.PreviewMaxSizeMB, MinPreviewMaxSizeMB, MaxPreviewMaxSizeMB); err != nil {
+			return cur, err
+		}
+		next.PreviewMaxSizeMB = *p.PreviewMaxSizeMB
+	}
+	if p.PermanentQuotaMB != nil {
+		if err := checkRange("永久空间配额(MB)", *p.PermanentQuotaMB, MinPermanentQuotaMB, MaxPermanentQuotaMB); err != nil {
+			return cur, err
+		}
+		// 允许把配额调到**低于**当前已用：已经设成永久的文件不动
+		// （反过来把用户已获得的东西悄悄收回，比"暂时不能再设"严重得多），
+		// 只是在新设永久时会因为超额度而被拒。这是有意的语义，写在这里备查。
+		next.PermanentQuotaMB = *p.PermanentQuotaMB
+	}
 
 	kv := map[string]string{
 		KeyMaxFileSizeMB:     strconv.Itoa(next.MaxFileSizeMB),
@@ -200,6 +282,8 @@ func (s *Service) Update(ctx context.Context, p Patch) (Values, error) {
 		KeyTrashDays:         strconv.Itoa(next.TrashDays),
 		KeyChunkSizeMB:       strconv.Itoa(next.ChunkSizeMB),
 		KeyUploadEnabled:     strconv.FormatBool(next.UploadEnabled),
+		KeyPreviewMaxSizeMB:  strconv.Itoa(next.PreviewMaxSizeMB),
+		KeyPermanentQuotaMB:  strconv.Itoa(next.PermanentQuotaMB),
 	}
 	if err := s.repo.PutSettings(ctx, kv); err != nil {
 		return cur, err
@@ -220,6 +304,8 @@ func Defaults() Values {
 		TrashDays:         DefTrashDays,
 		ChunkSizeMB:       DefChunkSizeMB,
 		UploadEnabled:     DefUploadEnabled,
+		PreviewMaxSizeMB:  DefPreviewMaxSizeMB,
+		PermanentQuotaMB:  DefPermanentQuotaMB,
 	}
 }
 
@@ -276,6 +362,22 @@ func fromMap(raw map[string]string) (Values, error) {
 			v.AllowedExtensions = joinExtList(list)
 		}
 	}
+	if s, ok := raw[KeyPreviewMaxSizeMB]; ok {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n < MinPreviewMaxSizeMB || n > MaxPreviewMaxSizeMB {
+			errs = append(errs, fmt.Sprintf("%s=%q 非法", KeyPreviewMaxSizeMB, s))
+		} else {
+			v.PreviewMaxSizeMB = n
+		}
+	}
+	if s, ok := raw[KeyPermanentQuotaMB]; ok {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n < MinPermanentQuotaMB || n > MaxPermanentQuotaMB {
+			errs = append(errs, fmt.Sprintf("%s=%q 非法", KeyPermanentQuotaMB, s))
+		} else {
+			v.PermanentQuotaMB = n
+		}
+	}
 	if len(errs) > 0 {
 		return v, fmt.Errorf("%w: %s", ErrInvalid, strings.Join(errs, "；"))
 	}
@@ -301,6 +403,8 @@ func Seed(ctx context.Context, repo Repo) error {
 	add(KeyTrashDays, strconv.Itoa(d.TrashDays))
 	add(KeyChunkSizeMB, strconv.Itoa(d.ChunkSizeMB))
 	add(KeyUploadEnabled, strconv.FormatBool(d.UploadEnabled))
+	add(KeyPreviewMaxSizeMB, strconv.Itoa(d.PreviewMaxSizeMB))
+	add(KeyPermanentQuotaMB, strconv.Itoa(d.PermanentQuotaMB))
 	return repo.PutSettings(ctx, kv)
 }
 

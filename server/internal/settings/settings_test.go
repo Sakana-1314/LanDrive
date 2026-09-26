@@ -60,6 +60,20 @@ func TestDefaultsMatchRequirements(t *testing.T) {
 	if d.MaxFileSizeMB != 500 || d.ChunkSizeMB != 4 {
 		t.Fatalf("默认体积/分片 = %d/%d，期望 500/4", d.MaxFileSizeMB, d.ChunkSizeMB)
 	}
+	// 需求：可预览文件大小限制默认 20MB。
+	if d.PreviewMaxSizeMB != 20 {
+		t.Fatalf("默认预览上限 = %d MB，需求为 20", d.PreviewMaxSizeMB)
+	}
+	if d.PreviewMaxSizeBytes() != 20<<20 {
+		t.Fatalf("PreviewMaxSizeBytes 换算错误: %d", d.PreviewMaxSizeBytes())
+	}
+	// 默认上限下：20MB 整可以预览，超出一字节就不行（边界不能"差不多"）。
+	if !d.PreviewSizeAllowed(20 << 20) {
+		t.Fatalf("恰好等于上限的文件应允许预览")
+	}
+	if d.PreviewSizeAllowed(20<<20 + 1) {
+		t.Fatalf("超过上限一字节的文件不应允许预览")
+	}
 }
 
 func TestNewLoadsStoredValues(t *testing.T) {
@@ -127,6 +141,8 @@ func TestUpdateValidatesRanges(t *testing.T) {
 		{TrashDays: intPtr(MaxTrashDay + 1)},
 		{ChunkSizeMB: intPtr(0)},
 		{ChunkSizeMB: intPtr(MaxChunkSizeMB + 1)},
+		{PreviewMaxSizeMB: intPtr(-1)},
+		{PreviewMaxSizeMB: intPtr(MaxPreviewMaxSizeMB + 1)},
 	}
 	for i, p := range bad {
 		if _, err := svc.Update(context.Background(), p); err == nil {
@@ -143,6 +159,9 @@ func TestUpdateValidatesRanges(t *testing.T) {
 		{TrashDays: intPtr(MaxTrashDay)},
 		{ChunkSizeMB: intPtr(MinChunkSizeMB)},
 		{ChunkSizeMB: intPtr(MaxChunkSizeMB)},
+		// 0 是合法值：表示不限制预览体积。
+		{PreviewMaxSizeMB: intPtr(MinPreviewMaxSizeMB)},
+		{PreviewMaxSizeMB: intPtr(MaxPreviewMaxSizeMB)},
 	}
 	for i, p := range good {
 		if _, err := svc.Update(context.Background(), p); err != nil {
@@ -160,18 +179,26 @@ func TestUpdatePersistsAndRefreshesCache(t *testing.T) {
 	trash := 10
 	enabled := false
 	exts := "PDF, .Docx, xlsx"
+	previewMax := 64
 	next, err := svc.Update(context.Background(), Patch{
 		MaxFileSizeMB:     &size,
 		RetentionDays:     &ret,
 		TrashDays:         &trash,
 		UploadEnabled:     &enabled,
 		AllowedExtensions: &exts,
+		PreviewMaxSizeMB:  &previewMax,
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if next.MaxFileSizeMB != size || next.RetentionDays != ret || next.TrashDays != trash {
 		t.Fatalf("返回值未更新: %+v", next)
+	}
+	if next.PreviewMaxSizeMB != previewMax {
+		t.Fatalf("预览上限未更新: %+v", next)
+	}
+	if !next.PreviewSizeAllowed(64<<20) || next.PreviewSizeAllowed(64<<20+1) {
+		t.Fatalf("预览上限边界判定错误")
 	}
 	if next.UploadEnabled {
 		t.Fatalf("上传开关应已关闭")
@@ -191,6 +218,33 @@ func TestUpdatePersistsAndRefreshesCache(t *testing.T) {
 	}
 	if svc2.Get().AllowedExtensions != ".docx,.pdf,.xlsx" {
 		t.Fatalf("持久化后重新载入不一致: %+v", svc2.Get())
+	}
+	if svc2.Get().PreviewMaxSizeMB != previewMax {
+		t.Fatalf("持久化后预览上限不一致: %+v", svc2.Get())
+	}
+}
+
+// TestPreviewLimitZeroMeansUnlimited 守住"0 = 不限制"这条语义。
+//
+// 为什么值得单测：0 在这里**不是**"什么都不给预览"，而是"关掉这道闸"。
+// 一旦被实现成"上限 0 字节"，管理员把值填 0 就会让所有文件都预览不了 ——
+// 表面上配置成功、实际全坏，正是最该被测试挡住的那类反直觉取值。
+func TestPreviewLimitZeroMeansUnlimited(t *testing.T) {
+	svc, _ := New(context.Background(), newMemRepo(nil))
+
+	zero := 0
+	v, err := svc.Update(context.Background(), Patch{PreviewMaxSizeMB: &zero})
+	if err != nil {
+		t.Fatalf("0 应被接受（表示不限制）: %v", err)
+	}
+	if v.PreviewMaxSizeBytes() != 0 {
+		t.Fatalf("上限 0 的字节数应为 0，实际 %d", v.PreviewMaxSizeBytes())
+	}
+	// 任意大的文件都应放行。
+	for _, n := range []int64{1, 20 << 20, 1 << 40} {
+		if !v.PreviewSizeAllowed(n) {
+			t.Fatalf("上限为 0（不限制）时应允许 %d 字节的文件预览", n)
+		}
 	}
 }
 

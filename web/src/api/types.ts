@@ -61,6 +61,10 @@ export interface Settings {
   trash_days: number
   chunk_size_mb: number
   upload_enabled: boolean
+  /** 在线预览的体积上限（MB）；0 表示不限制。只影响预览，下载不受限。 */
+  preview_max_size_mb: number
+  /** 全站共享的永久空间上限（MB）；0 表示关闭「设为永久」。 */
+  permanent_quota_mb: number
 }
 
 export interface UploadConfig {
@@ -114,6 +118,8 @@ export type PreviewKind =
   | 'text'
   | 'legacy-office'
   | 'unsupported'
+  /** 文件体积超过系统设置的预览上限：不给在线渲染，但仍可下载。 */
+  | 'too-large'
 
 export interface PreviewInfo {
   id: number

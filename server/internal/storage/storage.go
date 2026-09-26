@@ -728,12 +728,40 @@ func IsInlinePreviewable(ext string) bool {
 	return false
 }
 
+// PreviewTooLarge 是"文件体积超过预览上限"时使用的 kind。
+//
+// 单独一个 kind（而不是复用 unsupported）：两者的**成因与出路都不同** ——
+// unsupported 是"这类格式浏览器读不了，换格式再传"，这个是"文件太大，
+// 下载到本地看就行"。前端据此给不同文案，不然用户会去改格式、白折腾。
+const PreviewTooLarge = "too-large"
+
+// PreviewKindFor 判定前端该如何预览该文件，并叠加**体积上限**判定。
+//
+// maxBytes <= 0 表示不限制体积。
+//
+// 为什么把体积判定也放在 storage：与 PreviewKind 同理 —— 登录预览与
+// 免登录的分享预览必须用同一套规则。体积这道闸要拦的是"把整个文件读进
+// 浏览器再交给纯前端库解析"，两条预览路径都要拦，各写一份必然走样。
+//
+// 判定的**顺序**是有意的：先判体积再看格式。超大文件无论什么格式都不该
+// 送进浏览器渲染 —— 连"旧版 Office 请下载后查看"的提示也没必要给，
+// 因为对超大文件来说"下载"本来就是这个接口要引导的动作。
+func PreviewKindFor(ext string, sizeBytes, maxBytes int64) string {
+	if maxBytes > 0 && sizeBytes > maxBytes {
+		return PreviewTooLarge
+	}
+	return PreviewKind(ext)
+}
+
 // PreviewKind 判定前端该如何预览该扩展名的文件。
 //
 // 放在 storage 而不是 handler：分享的免登录预览与登录预览必须用**同一套**
 // 规则 —— 两处各写一份迟早会走样（例如一边放行了 svg 内联）。
 // 安全约定：只有 IsInlinePreviewable 允许内联的类型才交给浏览器原生渲染；
 // 其余（含 SVG/HTML）一律 unsupported，由前端改走下载。
+//
+// 注意：本函数只看扩展名、不看体积。需要连同体积上限一起判定时用
+// PreviewKindFor（预览入口都该用它）。
 func PreviewKind(ext string) string {
 	e := NormalizeExt(ext)
 	switch e {
