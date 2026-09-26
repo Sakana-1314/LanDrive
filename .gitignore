@@ -4,9 +4,15 @@ web/dist/
 server/bin/
 
 # 依赖
+# 注意：带斜杠的写法（`node_modules/`）在 git 里**只匹配目录**，软链形态会漏过。
+# 曾因此把一条自引用软链提交进公开仓库，故这里再补一条不带斜杠的兜底规则。
+node_modules
 node_modules/
 web/node_modules/
 docs/websites/node_modules/
+
+# 本地构建缓存（同理，软链形态也要挡住）
+.gocache
 
 # 文档站构建产物
 docs/websites/.vitepress/dist/
