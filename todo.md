@@ -16,6 +16,46 @@
 
 ## Log
 
+- **2026-09-26 P33–P36 合并与内网部署验收**
+
+  9 个提交（4 个功能 + gitignore 加固 + 台账 + 审计修复 3 个）以 **rebase-merge** 合入 `main`
+  （PR #31）：`main` 保持线性、每个功能各占一个提交、没有 merge commit。
+  镜像 `构建并推送镜像`（run 36208300154）成功，文档站随后自动发布（run 36208300176）。
+
+  **部署前先在"生产同版本引擎"上排练迁移**：本机只有 MariaDB 11.8，而线上是 **MySQL 8.4.11**，
+  于是用 1Panel 那台机器上的 MySQL 建了个临时库 `lanfs_migcheck`，把 0001–0004 依次执行一遍
+  （并先插一条存量文件记录模拟升级场景）：
+  `expires_at` 变为可空、**存量行与全部索引都在**、0004 重复执行不报错，用完即删临时库。
+  这一步是为了不拿线上第一次跑这条 `ALTER` —— 万一失败，容器起不来就是全站 500。
+
+  **部署**（AGENTS.md §9，只更新改动过的服务）：回滚点
+  `/root/landrive-update-20260926-012623`（含旧 compose 与 `images-before.txt`），
+  `docker compose pull api web` → `up -d --no-deps api`（先 api，它要跑迁移）→ 等 healthy → 再 web。
+
+  **核对 digest（不是只看 CI 绿灯）**：
+
+  | 镜像 | CI 推送的 digest | 部署机 `docker images --digests` |
+  | --- | --- | --- |
+  | `lan-drive:server` | `sha256:badddf3a99a0…d1508` | 一致 ✅ |
+  | `lan-drive:web` | `sha256:3db82d2354ae…75907` | 一致 ✅ |
+
+  **对着生产的验收**：两个容器 healthy；`/api/health` 返回 `schema_ver=4`（迁移已生效）；
+  同源 `/api` 反代 `GET /` 与 `GET /api/health` 均 200；新产物指纹确实进了容器
+  （web 入口 bundle `index-BcCRb1-a.js` 里含本次新增文案「按人查看」，
+  且**与本地 `vite build` 产物同名同指纹**；server 二进制含「永久空间不足」）。
+  **数据未动**：`users=2 files=134 folders=26 shares=0`、`data/users` 134 个文件，
+  与部署前基线逐项相同；`migrations=1,2,3,4`、`expires_at` 可空、已永久文件 0 条。
+
+  另做了一轮**只读**功能校验（凭据从容器环境读取，全程不打印密码与 token）：
+  `GET /api/files/permanent` → `{"enabled":true,"quota_bytes":107374182400,"used_bytes":0,...}`
+  （默认 100G 的池已就绪）；`GET /api/files?scope=all` 用**真实 134 行**跑通新的可空
+  `expires_at` 扫描路径（首行 `expires_at` 正常解析、`permanent=false`、`days_left=15`）；
+  未登录访问新接口返回 401。
+
+  ⚠️ **踩到的坑（记下来免得再犯）**：验收脚本里 `docker exec ... grep -l '按人查看' /usr/share/nginx/html/assets/*.js`
+  把 glob 交给了**宿主** shell 展开 —— 宿主上没有这个目录，于是字面量 `*.js` 被传进容器，
+  grep 找不到文件，**报了一次假失败**（当时镜像其实是对的）。glob 必须写在容器内的 `sh -c` 里。
+
 - **2026-09-26 P33–P36 收尾：清掉误提交的软链，并按独立审计修掉 3 处缺陷**
 
   **1) 误提交的软链（先处理）**：整理提交时 `git add -A` 把两条**自引用软链**
