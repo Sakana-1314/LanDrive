@@ -222,6 +222,67 @@ http
       const items = scope === 'mine' ? FILES.filter((f) => f.owner_id === 1) : FILES
       return json(res, { items, total: items.length, page: 1, page_size: 20 })
     }
+    // --- 永久空间与「设为永久」：口径与 server 端保持一致，便于端到端验证 ---
+    // 必须注册在 /api/files/:id 之前，否则 "permanent" 会被当成 id。
+    if (p === '/api/files/permanent') {
+      const used = FILES.filter((f) => f.status === 'active' && f.permanent)
+        .reduce((n, f) => n + f.size_bytes, 0)
+      const quota = Number(SETTINGS.permanent_quota_mb || 0) * 1024 * 1024
+      return json(res, {
+        enabled: quota > 0,
+        quota_bytes: quota,
+        used_bytes: used,
+        free_bytes: Math.max(0, quota - used)
+      })
+    }
+    const permMatch = p.match(/^\/api\/files\/(\d+)\/permanent$/)
+    if (permMatch && req.method === 'PUT') {
+      return readBody(req).then((body) => {
+        let payload = {}
+        try { payload = JSON.parse(body || '{}') } catch { /* 保持空 */ }
+        const f = FILES.find((x) => x.id === Number(permMatch[1]))
+        if (!f) return json(res, { error: '文件不存在' }, 404)
+        const want = payload.permanent === undefined ? true : !!payload.permanent
+        const quota = Number(SETTINGS.permanent_quota_mb || 0) * 1024 * 1024
+        if (want) {
+          if (quota <= 0) return json(res, { error: '管理员未开放永久保存' }, 403)
+          const used = FILES.filter((x) => x.status === 'active' && x.permanent)
+            .reduce((n, x) => n + x.size_bytes, 0)
+          if (used + f.size_bytes > quota) {
+            return json(res, { error: `永久空间不足：已用 ${fmtBytes(used)} / 上限 ${fmtBytes(quota)}，还需 ${fmtBytes(used + f.size_bytes - quota)}` }, 409)
+          }
+          f.permanent = true
+          f.expires_at = null
+          f.days_left = 0
+        } else {
+          f.permanent = false
+          f.expires_at = new Date(Date.now() + 15 * 86400000).toISOString()
+          f.days_left = 15
+        }
+        return json(res, f)
+      })
+    }
+    // 目录级（递归到文件）：mock 里用 rel_path 前缀模拟
+    const folderPermMatch = p.match(/^\/api\/folders\/(\d+)\/permanent$/)
+    if (folderPermMatch && req.method === 'PUT') {
+      return readBody(req).then((body) => {
+        let payload = {}
+        try { payload = JSON.parse(body || '{}') } catch { /* 保持空 */ }
+        const want = payload.permanent === undefined ? true : !!payload.permanent
+        const folder = FOLDERS.find((x) => x.id === Number(folderPermMatch[1]))
+        if (!folder) return json(res, { error: '文件夹不存在' }, 404)
+        const quota = Number(SETTINGS.permanent_quota_mb || 0) * 1024 * 1024
+        if (want && quota <= 0) return json(res, { error: '管理员未开放永久保存' }, 403)
+        // mock 的 FILES 没有真实目录层级，按 owner 粗匹配即可 —— 这个端点的
+        // 递归正确性由 server 的集成测试守卫，浏览器这里只验 UI 是否走通。
+        const hit = FILES.filter((f) => f.owner_id === folder.owner_id && f.status === 'active')
+        for (const f of hit) {
+          if (want) { f.permanent = true; f.expires_at = null; f.days_left = 0 }
+          else { f.permanent = false; f.expires_at = new Date(Date.now() + 15 * 86400000).toISOString(); f.days_left = 15 }
+        }
+        return json(res, { ok: true, affected: hit.length, permanent: want })
+      })
+    }
     // --- 预览：预览弹层（iframe 内嵌）的端到端检查用 ---
     // kind 的判定口径与 server/internal/storage.PreviewKind 保持一致：
     // 前端拿到错误的 kind 会走错渲染分支，检查就测不到真实路径。

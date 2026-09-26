@@ -109,6 +109,13 @@ func failErr(c *gin.Context, err error, fallback string) {
 		fail(c, http.StatusConflict, err.Error())
 	case errors.Is(err, files.ErrCannotPinSelf):
 		fail(c, http.StatusBadRequest, err.Error())
+	// 永久空间不足 → 409：这不是"请求格式错"，而是与当前服务端状态冲突
+	// （清掉一些文件再试就能成功），409 让前端能把它与参数校验错误区分开。
+	case errors.Is(err, files.ErrPermanentQuota):
+		fail(c, http.StatusConflict, err.Error())
+	// 管理员关闭了永久功能 → 403：用户没有这个能力，重试也没用。
+	case errors.Is(err, files.ErrPermanentDisabled):
+		fail(c, http.StatusForbidden, err.Error())
 	case errors.Is(err, files.ErrForbidden), errors.Is(err, upload.ErrForbidden),
 		errors.Is(err, folders.ErrForbidden), errors.Is(err, shares.ErrForbidden):
 		fail(c, http.StatusForbidden, err.Error())

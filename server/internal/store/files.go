@@ -17,13 +17,14 @@ func scanFile(sc interface {
 	Scan(dest ...any) error
 }) (*model.File, error) {
 	var f model.File
-	var deleted, purge sql.NullTime
+	var deleted, purge, expires sql.NullTime
 	if err := sc.Scan(&f.ID, &f.OwnerID, &f.FolderID, &f.OriginalNam, &f.Ext, &f.SizeBytes, &f.Mime, &f.SHA256,
-		&f.RelPath, &f.Status, &f.ExpiresAt, &deleted, &purge, &f.CreatedAt, &f.UpdatedAt,
+		&f.RelPath, &f.Status, &expires, &deleted, &purge, &f.CreatedAt, &f.UpdatedAt,
 		&f.OwnerName, &f.OwnerEmployeeNo); err != nil {
 		return nil, err
 	}
-	f.ExpiresAt = f.ExpiresAt.UTC()
+	// expires_at 为 NULL = 永久，scan 出来是 Valid=false，转成 nil 指针即可。
+	f.ExpiresAt = nullTime(expires)
 	f.CreatedAt = f.CreatedAt.UTC()
 	f.UpdatedAt = f.UpdatedAt.UTC()
 	f.DeletedAt = nullTime(deleted)
@@ -38,7 +39,7 @@ func (s *Store) CreateFile(ctx context.Context, f *model.File) error {
 			rel_path, status, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.OwnerID, f.FolderID, f.OriginalNam, f.Ext, f.SizeBytes, f.Mime, f.SHA256, f.RelPath,
-		f.Status, f.ExpiresAt.UTC())
+		f.Status, expiresArg(f.ExpiresAt))
 	if err != nil {
 		if isDuplicate(err) {
 			return ErrConflict
@@ -107,6 +108,21 @@ func (q FileQuery) order() string {
 	return "DESC"
 }
 
+// orderBy 组装 ORDER BY 子句。
+//
+// 关键：按到期时间排序时，**永久文件（expires_at IS NULL）固定排在最后**，
+// 与升降序无关。MySQL 对 NULL 的默认处理是"ASC 在前、DESC 在后"，
+// 于是升序时永久文件会冒到最前面 —— 用户看到"永久"排在一堆马上要到期的
+// 文件之前，会以为它也快到期了。显式用 `IS NULL` 排出正确顺序。
+// 不用 MySQL 专有的 `NULLS LAST`：MySQL 8 与 MariaDB 11 支持情况不一致。
+func (q FileQuery) orderBy() string {
+	col := q.sortColumn()
+	if col == "f.expires_at" {
+		return "f.expires_at IS NULL, " + col + " " + q.order()
+	}
+	return col + " " + q.order()
+}
+
 func (q FileQuery) conditions() (string, []any) {
 	conds := []string{"1=1"}
 	args := []any{}
@@ -158,7 +174,7 @@ func (s *Store) ListFiles(ctx context.Context, q FileQuery) ([]model.File, int64
 	}
 
 	sqlText := `SELECT ` + fileCols + ` FROM files f JOIN users u ON u.id = f.owner_id
-		WHERE ` + where + ` ORDER BY ` + q.sortColumn() + ` ` + q.order() + `, f.id DESC LIMIT ? OFFSET ?`
+		WHERE ` + where + ` ORDER BY ` + q.orderBy() + `, f.id DESC LIMIT ? OFFSET ?`
 	listArgs := append(append([]any{}, args...), q.PageSize, (q.Page-1)*q.PageSize)
 
 	rows, err := s.db.QueryContext(ctx, sqlText, listArgs...)
@@ -289,12 +305,15 @@ func (s *Store) SoftDeleteAllByOwner(ctx context.Context, ownerID int64, deleted
 	return res.RowsAffected()
 }
 
-// RestoreFile 从回收站恢复，重算到期时间。
-func (s *Store) RestoreFile(ctx context.Context, id int64, expiresAt time.Time) error {
+// RestoreFile 从回收站恢复，并把到期时间设为 expiresAt（nil = 永久）。
+//
+// 永久文件被软删后恢复，**到期时间保持 NULL**（仍永久）：软删只是状态变化，
+// 不应该顺手把它降级成有期限 —— 恢复的语义是"回到删除前的样子"。
+func (s *Store) RestoreFile(ctx context.Context, id int64, expiresAt *time.Time) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE files SET status = ?, deleted_at = NULL, purge_at = NULL, expires_at = ?
 		 WHERE id = ? AND status = ?`,
-		model.StatusActive, expiresAt.UTC(), id, model.StatusTrashed)
+		model.StatusActive, expiresArg(expiresAt), id, model.StatusTrashed)
 	if err != nil {
 		return err
 	}
@@ -452,6 +471,74 @@ func (s *Store) AllRelPaths(ctx context.Context) (map[string]int64, error) {
 		out[p] = id
 	}
 	return out, rows.Err()
+}
+
+// PermanentUsage 汇总**全站**永久文件占用的字节数。
+//
+// 口径见 settings.PermanentQuotaMB：只算 active 的永久文件。
+// 回收站里的永久文件不算 —— 它们已设 purge_at、几天内必被清掉，
+// 若算进来会让"删文件"这个唯一的自救手段不释放额度。
+func (s *Store) PermanentUsage(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) FROM files
+		 WHERE status = ? AND expires_at IS NULL`,
+		model.StatusActive).Scan(&n)
+	return n, err
+}
+
+// SetExpiry 把某个文件改为永久（expiresAt=nil）或改为有期限。
+//
+// 只改 expires_at，**不动 status**：由服务层决定允许哪些状态。
+// 返回受影响行数，0 表示文件不存在。
+func (s *Store) SetExpiry(ctx context.Context, id int64, expiresAt *time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE files SET expires_at = ? WHERE id = ?`,
+		expiresArg(expiresAt), id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// SetExpiryUnderPath 把某目录树下（含子孙）的 active 文件批量设为永久或改为有期限。
+//
+// dirRel 是**磁盘相对路径前缀**，与 CountFilesUnderFolder 用同一套前缀匹配，
+// 因此"递归范围"和"统计该目录下有多少文件"的口径天然一致 ——
+// 不会出现"提示 10 个文件、实际只改了 8 个"。
+func (s *Store) SetExpiryUnderPath(ctx context.Context, ownerID int64, dirRel string, expiresAt *time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE files SET expires_at = ?
+		 WHERE owner_id = ? AND status = ? AND rel_path LIKE ?`,
+		expiresArg(expiresAt), ownerID, model.StatusActive, escapeLike(dirRel)+"/%")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PermanentUsageUnderPath 汇总某目录树下的永久文件占用。
+func (s *Store) PermanentUsageUnderPath(ctx context.Context, ownerID int64, dirRel string) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) FROM files
+		 WHERE owner_id = ? AND status = ? AND expires_at IS NULL AND rel_path LIKE ?`,
+		ownerID, model.StatusActive, escapeLike(dirRel)+"/%").Scan(&n)
+	return n, err
+}
+
+// PermanentizableBytes 汇总"若把该目录树设为永久，会新增占用多少字节"。
+//
+// 只算**当前还不是永久**的 active 文件（expires_at IS NOT NULL）：
+// 已经是永久的那些早就计入配额了，再算一遍会让差额提示虚高，
+// 用户看着"还差 3GB"却怎么清理都设不上。
+func (s *Store) PermanentizableBytes(ctx context.Context, ownerID int64, dirRel string) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT CAST(COALESCE(SUM(size_bytes), 0) AS SIGNED) FROM files
+		 WHERE owner_id = ? AND status = ? AND expires_at IS NOT NULL AND rel_path LIKE ?`,
+		ownerID, model.StatusActive, escapeLike(dirRel)+"/%").Scan(&n)
+	return n, err
 }
 
 // Stats 汇总管理端看板数据。

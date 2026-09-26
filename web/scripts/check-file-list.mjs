@@ -295,6 +295,60 @@ try {
   check(overflow <= 2, `390px 下文件列表横向溢出 ${overflow}px`)
   await mobile.close()
 
+  // --- 9) 永久有效期：显示「永久」+ 二次确认里提示 100G 配额 ---
+  //
+  // 需求：支持把有效期设为永久，但要二次确认并提示永久空间只有 100G（可配置）。
+  // 这里守的两个点都是"渲染结果"，单测与类型检查看不见：
+  //   a) 永久文件（后端 days_left=0、expires_at=null）**不能**显示成"今天到期"；
+  //   b) 点「设为永久」必须弹确认框，且框里带永久空间数字 —— 不能一点就生效。
+  await page.goto(`${BASE}/files/mine`, { waitUntil: 'networkidle', timeout: 30000 })
+  await page.waitForTimeout(1000)
+  const expiryOf = async (name) =>
+    page.evaluate((n) => {
+      const tr = [...document.querySelectorAll('.desktop-only tbody tr')].find((r) =>
+        r.innerText.includes(n)
+      )
+      if (!tr) return null
+      return [...tr.querySelectorAll('.n-tag')].map((t) => t.innerText.trim()).join('|')
+    }, name)
+  const permBadge = await expiryOf('永久保留的台账.xlsx')
+  check(!!permBadge, '找不到"已是永久"的 mock 文件行')
+  check(/永久/.test(permBadge || ''), `已永久文件的到期列应显示「永久」，实际「${permBadge}」`)
+  check(
+    !/今天|明天|天后/.test(permBadge || ''),
+    `已永久文件不该显示成倒计时（days_left=0 会被误读成今天到期），实际「${permBadge}」`
+  )
+  // 该行应给"改回有期限"的出口，而不是又显示"设为永久"
+  const permRow = page.locator('.desktop-only tbody tr', { hasText: '永久保留的台账.xlsx' }).first()
+  check(
+    (await permRow.getByText('改回有期限', { exact: true }).count()) > 0,
+    '已永久文件应提供「改回有期限」的入口'
+  )
+
+  // 点「设为永久」→ 必须出现二次确认，且提到永久空间
+  const datedRow = page.locator('.desktop-only tbody tr', { hasText: '车间设备巡检记录表' }).first()
+  await datedRow.getByText('设为永久', { exact: true }).click()
+  await page.waitForTimeout(900)
+  const dialogText = await page
+    .locator('.n-dialog')
+    .innerText()
+    .then((t) => t.replace(/\s+/g, ' ').trim())
+    .catch(() => '')
+  check(dialogText.length > 0, '点「设为永久」没有弹出二次确认框（一点就生效）')
+  check(
+    /永久空间|已用|还剩/.test(dialogText),
+    `二次确认里应提示永久空间情况，实际「${dialogText}」`
+  )
+  check(/100/.test(dialogText), `二次确认里应带上可配置的配额数字（默认 100G），实际「${dialogText}」`)
+  // 取消后不应改动任何东西（确认框的意义就在这里）
+  await page.locator('.n-dialog button', { hasText: '取消' }).first().click()
+  await page.waitForTimeout(800)
+  const afterCancel = await expiryOf('车间设备巡检记录表.xlsx')
+  check(
+    !/永久/.test(afterCancel || ''),
+    `取消二次确认后文件不该变成永久，实际到期列「${afterCancel}」`
+  )
+
   check(errs.length === 0, `页面有 JS 运行时错误：${errs.slice(0, 2).join(' | ')}`)
   await ctx.close()
 } finally {

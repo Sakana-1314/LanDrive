@@ -360,3 +360,52 @@ func TestSeedOnlyFillsMissingKeys(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// TestPermanentQuotaSemantics 守住永久配额的口径。
+//
+// 三个反直觉点，每个写错都会让"设为永久"要么拦不住、要么根本用不了：
+//  1. 配额 0 = **关闭永久功能**（不是"只允许永久 0 字节"）；
+//  2. 配额是**全站共享**的池，判定必须基于传入的 usedBytes；
+//  3. 恰好等于配额要放行，超一字节才拒。
+func TestPermanentQuotaSemantics(t *testing.T) {
+	d := Defaults()
+	// 需求：永久空间默认 100G。
+	if d.PermanentQuotaMB != 102400 {
+		t.Fatalf("默认永久配额 = %d MB，需求为 102400（100G）", d.PermanentQuotaMB)
+	}
+	if d.PermanentQuotaBytes() != 102400<<20 {
+		t.Fatalf("PermanentQuotaBytes 换算错误: %d", d.PermanentQuotaBytes())
+	}
+	if !d.PermanentEnabled() {
+		t.Fatalf("默认应开放永久功能")
+	}
+
+	quota := d.PermanentQuotaBytes()
+	// 3) 边界：刚好放得下 / 超一字节放不下
+	if !d.PermanentFits(0, quota) {
+		t.Fatalf("空池应能放下恰好等于配额的文件")
+	}
+	if d.PermanentFits(0, quota+1) {
+		t.Fatalf("超过配额一字节不应放行")
+	}
+	// 2) 已用要计入：剩 100 字节时，101 字节的文件放不下
+	if !d.PermanentFits(quota-100, 100) {
+		t.Fatalf("刚好用完剩余额度应放行")
+	}
+	if d.PermanentFits(quota-100, 101) {
+		t.Fatalf("超出剩余额度应拒绝")
+	}
+	// 已用超过配额（管理员调低过）：任何新增都应被拒，且不能因减法溢出而误放行
+	if d.PermanentFits(quota+1, 1) {
+		t.Fatalf("已用超过配额时不应再放行")
+	}
+
+	// 1) 0 = 关闭
+	off := Values{PermanentQuotaMB: 0}
+	if off.PermanentEnabled() {
+		t.Fatalf("配额为 0 应视为关闭永久功能")
+	}
+	if off.PermanentFits(0, 1) {
+		t.Fatalf("永久功能关闭时任何文件都不该能设为永久")
+	}
+}

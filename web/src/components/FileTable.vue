@@ -27,6 +27,7 @@ import {
   DownloadOutline,
   EyeOutline,
   FolderOpenOutline,
+  InfiniteOutline,
   LinkOutline,
   RefreshOutline,
   SearchOutline,
@@ -99,6 +100,8 @@ const emit = defineEmits<{
   (e: 'share-folder', folder: Folder): void
   (e: 'rename-folder', folder: Folder): void
   (e: 'delete-folder', folder: Folder): void
+  /** 整个文件夹（递归到文件）设置有效期。 */
+  (e: 'permanent-folder', folder: Folder): void
 }>()
 
 /**
@@ -160,6 +163,22 @@ function expiryType(days: number): 'error' | 'warning' | 'default' {
   if (days <= 3) return 'error'
   if (days <= 7) return 'warning'
   return 'default'
+}
+
+/**
+ * 到期列的文案。
+ *
+ * 永久文件（expires_at 为 null）必须显示「永久」而不是走 formatDaysLeft：
+ * 后端的 days_left 对永久文件恒为 0，直接渲染会显示成"今天到期" ——
+ * 与事实完全相反，是这次最容易犯的错。因此先判 permanent。
+ */
+function expiryText(file: FileItem): string {
+  return file.permanent ? '永久' : formatDaysLeft(file.days_left)
+}
+
+/** 永久文件用 success 色（与"即将到期"的红/黄形成对照）。 */
+function expiryTypeOf(file: FileItem): 'error' | 'warning' | 'default' | 'success' {
+  return file.permanent ? 'success' : expiryType(file.days_left)
 }
 
 const columns = computed<DataTableColumns<BrowserRow>>(() => {
@@ -264,6 +283,12 @@ const columns = computed<DataTableColumns<BrowserRow>>(() => {
       width: 150,
       sorter: (a, b) => {
         if (a.kind === 'folder' || b.kind === 'folder') return 0
+        // 排序实际由服务端做（表格是 remote 模式），这里只是同页兜底。
+        // 永久文件没有天数可比，统一排在"最晚"而不是用 days_left=0 冒到最前 ——
+        // 后者会让"永久"显示成"马上就要到期"的顺序，与事实相反。
+        if (a.file.permanent && b.file.permanent) return 0
+        if (a.file.permanent) return 1
+        if (b.file.permanent) return -1
         return a.file.days_left - b.file.days_left
       },
       sortOrder: toNSort(sortOrder.value, 'expires_at', sortKey.value),
@@ -271,8 +296,8 @@ const columns = computed<DataTableColumns<BrowserRow>>(() => {
         if (row.kind === 'folder') return '—'
         return h(
           NTag,
-          { size: 'small', type: expiryType(row.file.days_left), bordered: false },
-          { default: () => formatDaysLeft(row.file.days_left) }
+          { size: 'small', type: expiryTypeOf(row.file), bordered: false },
+          { default: () => expiryText(row.file) }
         )
       }
     })
@@ -313,6 +338,11 @@ const columns = computed<DataTableColumns<BrowserRow>>(() => {
             h(NButton, { size: 'small', quaternary: true, type: 'primary', onClick: () => emit('share-folder', row.folder) }, {
               icon: () => h(NIcon, null, { default: () => h(LinkOutline) }),
               default: () => '分享'
+            }),
+            // 整个文件夹（递归到其中所有文件）设为永久 / 改回有期限
+            h(NButton, { size: 'small', quaternary: true, onClick: () => emit('permanent-folder', row.folder) }, {
+              icon: () => h(NIcon, null, { default: () => h(InfiniteOutline) }),
+              default: () => '有效期'
             }),
             h(NButton, { size: 'small', quaternary: true, onClick: () => emit('rename-folder', row.folder) }, {
               icon: () => h(NIcon, null, { default: () => h(CreateOutline) }),
@@ -398,6 +428,22 @@ const columns = computed<DataTableColumns<BrowserRow>>(() => {
             icon: () => h(NIcon, null, { default: () => h(CreateOutline) }),
             default: () => '重命名'
           }),
+          // 永久：已永久时给"改回有期限"的出口（误操作可救），否则给"设为永久"。
+          // 两者都走带二次确认的 dialog，这里只负责触发。
+          h(
+            NButton,
+            {
+              size: 'small',
+              quaternary: true,
+              type: file.permanent ? 'default' : 'primary',
+              onClick: () =>
+                file.permanent ? actions.onSetDated(file) : actions.confirmSetPermanent(file)
+            },
+            {
+              icon: () => h(NIcon, null, { default: () => h(InfiniteOutline) }),
+              default: () => (file.permanent ? '改回有期限' : '设为永久')
+            }
+          ),
           h(
             NPopconfirm,
             { onPositiveClick: () => actions.confirmDelete(file) },
@@ -518,6 +564,11 @@ const pagination = computed(() => ({
                   <n-icon><link-outline /></n-icon>
                 </template>
               </n-button>
+              <n-button size="small" quaternary @click="emit('permanent-folder', row.folder)">
+                <template #icon>
+                  <n-icon><infinite-outline /></n-icon>
+                </template>
+              </n-button>
               <n-button size="small" quaternary @click="emit('rename-folder', row.folder)">
                 <template #icon>
                   <n-icon><create-outline /></n-icon>
@@ -549,10 +600,10 @@ const pagination = computed(() => ({
             <n-tag
               v-if="props.showExpiry && !props.adminMode"
               size="small"
-              :type="expiryType(row.file.days_left)"
+              :type="expiryTypeOf(row.file)"
               :bordered="false"
             >
-              {{ formatDaysLeft(row.file.days_left) }}
+              {{ expiryText(row.file) }}
             </n-tag>
             <n-tag v-else-if="props.adminMode && row.file.status === 'trashed'" size="small" type="error" :bordered="false">
               待清理
@@ -598,6 +649,20 @@ const pagination = computed(() => ({
               <n-button size="small" quaternary @click="actions.onRename(row.file)">
                 <template #icon>
                   <n-icon><create-outline /></n-icon>
+                </template>
+              </n-button>
+              <!-- 永久 / 改回有期限：与桌面端同一套确认弹窗，避免两套视图行为不一致 -->
+              <n-button
+                size="small"
+                quaternary
+                @click="
+                  row.file.permanent
+                    ? actions.onSetDated(row.file)
+                    : actions.confirmSetPermanent(row.file)
+                "
+              >
+                <template #icon>
+                  <n-icon><infinite-outline /></n-icon>
                 </template>
               </n-button>
               <n-button size="small" quaternary type="error" @click="actions.confirmDelete(row.file)">

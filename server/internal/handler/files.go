@@ -197,6 +197,86 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 	ok(c, gin.H{"ok": true, "file": f})
 }
 
+// PermanentStatus 处理 GET /api/files/permanent，返回全站永久空间的使用情况。
+//
+// 前端在弹「确认设为永久」的二次确认前会先取它，好在确认框里告诉用户
+// "当前已用 / 上限 / 还剩多少" —— 需求要求提示永久空间只有 100G，
+// 光给一个静态数字没用，用户想看到的是自己还剩多少。
+func (h *Handler) PermanentStatus(c *gin.Context) {
+	st, err := h.files.PermanentStatusOf(c.Request.Context())
+	if err != nil {
+		failErr(c, err, "查询永久空间失败")
+		return
+	}
+	ok(c, st)
+}
+
+// setPermanentReq 是设置永久的请求体。
+//
+// 用指针是为了区分"没传"与"传了 false"：没传时按"设为永久"处理
+// （保持接口向后兼容、调用方少写一个字段），传了 false 才是改回有期限。
+type setPermanentReq struct {
+	Permanent *bool `json:"permanent"`
+}
+
+// SetFilePermanent 处理 PUT /api/files/:id/permanent。
+//
+// 语义：permanent 省略或 true → 设为永久；false → 改回按保留天数到期。
+func (h *Handler) SetFilePermanent(c *gin.Context) {
+	id, valid := pathInt64(c, "id")
+	if !valid {
+		return
+	}
+	permanent, okBody := permanentFlag(c)
+	if !okBody {
+		return
+	}
+	f, err := h.files.SetPermanent(c.Request.Context(), id, permanent, currentUser(c))
+	if err != nil {
+		failErr(c, err, "设置有效期失败")
+		return
+	}
+	ok(c, f)
+}
+
+// permanentFlag 解析请求体里的 permanent 字段（缺省视为 true）。
+func permanentFlag(c *gin.Context) (bool, bool) {
+	var req setPermanentReq
+	if !bindJSON(c, &req) {
+		return false, false
+	}
+	if req.Permanent == nil {
+		return true, true
+	}
+	return *req.Permanent, true
+}
+
+// SetFolderPermanent 处理 PUT /api/folders/:id/permanent。
+//
+// 「整个文件夹递归到文件」都设成永久/改回有期限。目录本身没有永久属性
+// （永久是文件的属性，目录只是一次操作的范围），因此这里返回受影响文件数。
+func (h *Handler) SetFolderPermanent(c *gin.Context) {
+	id, valid := pathInt64(c, "id")
+	if !valid {
+		return
+	}
+	folder, dirRel, err := h.folders.ResolveDir(c.Request.Context(), currentUser(c), id)
+	if err != nil {
+		failErr(c, err, "文件夹不存在或无权操作")
+		return
+	}
+	permanent, okBody := permanentFlag(c)
+	if !okBody {
+		return
+	}
+	n, err := h.files.SetPermanentUnderFolder(c.Request.Context(), folder.OwnerID, dirRel, permanent, currentUser(c))
+	if err != nil {
+		failErr(c, err, "设置有效期失败")
+		return
+	}
+	ok(c, gin.H{"ok": true, "affected": n, "permanent": permanent})
+}
+
 // ServeContent 处理 GET /api/files/:id/content（内联，支持 Range，供预览与播放）。
 func (h *Handler) ServeContent(c *gin.Context) {
 	h.serveFile(c, false)

@@ -313,9 +313,11 @@ func (s *Service) Complete(ctx context.Context, id string, actor *model.User) (*
 		Mime:        storage.MIMEFor(sess.Ext, sess.OriginalName),
 		SHA256:      "",
 		// 占位路径放在会话目录下，合并成功后会改成 <目录>/<fileID><ext>。
-		RelPath:   fmt.Sprintf("%s/pending-%s%s", sess.DirRel, sess.ID, sess.Ext),
-		Status:    model.StatusActive,
-		ExpiresAt: time.Now().UTC().Truncate(time.Second).AddDate(0, 0, cfg.RetentionDays),
+		RelPath: fmt.Sprintf("%s/pending-%s%s", sess.DirRel, sess.ID, sess.Ext),
+		Status:  model.StatusActive,
+		// 上传的文件一律**先按保留天数**给出到期时间；"永久"是上传后由用户
+		// 显式设置的操作（要二次确认、受全站永久配额约束），不能在 complete 里默认给出。
+		ExpiresAt: expiresPtr(time.Now().UTC().Truncate(time.Second).AddDate(0, 0, cfg.RetentionDays)),
 	}
 	if err := s.store.CreateFile(ctx, placeholder); err != nil {
 		return nil, err
@@ -534,6 +536,11 @@ func bytesToMB(n int64) int64 {
 	}
 	return (n + (1 << 20) - 1) >> 20
 }
+
+// expiresPtr 取一个到期时间的地址（model.File.ExpiresAt 是 *time.Time，
+// nil 表示永久）。上传路径永远传一个有期限的时间，这个helper 只是让
+// "这里生成的是一个有期限的到期时间"在代码上显式可见。
+func expiresPtr(t time.Time) *time.Time { return &t }
 
 func displayExt(ext string) string {
 	if ext == "" {

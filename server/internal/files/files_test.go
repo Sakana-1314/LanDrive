@@ -7,6 +7,10 @@ import (
 	"lan-drive/internal/model"
 )
 
+// timePtr 取时间地址：model.File.ExpiresAt 是 *time.Time（nil = 永久），
+// 测试里大多要造"有期限"的文件，用这个helper 免得每处写临时变量。
+func timePtr(t time.Time) *time.Time { return &t }
+
 // 这些测试只覆盖不依赖数据库的纯逻辑：分页规范化、展示字段计算与权限判定。
 
 func TestNormalizePage(t *testing.T) {
@@ -39,7 +43,7 @@ func TestDecorateComputesDaysLeftAndEditability(t *testing.T) {
 		ID:        1,
 		OwnerID:   5,
 		Status:    model.StatusActive,
-		ExpiresAt: time.Now().UTC().Add(72 * time.Hour),
+		ExpiresAt: timePtr(time.Now().UTC().Add(72 * time.Hour)),
 	}
 
 	// 属主：可编辑，剩余天数约 3 天
@@ -76,7 +80,7 @@ func TestDecorateComputesDaysLeftAndEditability(t *testing.T) {
 
 	// 已过期文件：剩余天数为负
 	expired := *f
-	expired.ExpiresAt = time.Now().UTC().Add(-48 * time.Hour)
+	expired.ExpiresAt = timePtr(time.Now().UTC().Add(-48 * time.Hour))
 	got = svc.decorate(&expired, owner)
 	if got.DaysLeft >= 0 {
 		t.Fatalf("已过期文件剩余天数应为负，实际 %d", got.DaysLeft)

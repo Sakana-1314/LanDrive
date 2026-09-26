@@ -1,14 +1,17 @@
 <script setup lang="ts">
-// 全部文件 / 我的文件。
+// 我的文件 / 按人查看某个人的文件。
 //
 // 导航分两层：
 //   - 人员：左侧菜单「全部文件」展开后按人切换（?owner=<id>），本页不重复提供；
 //   - 目录：本页内的文件夹导航（?folder=<id>），带面包屑，可新建/重命名/删除。
 //
+// 注：不带 owner 的"全部人员混合视图"已下线（路由会把 /files 重定向到
+// /files/mine），因此 `scope === 'all'` 时**一定**带着 owner，归属始终明确。
+//
 // 上传入口有两个，都不占独立拖拽区的版面：
 //   - 工具条的「上传文件」按钮（移动端没有拖拽操作，必须留按钮）；
 //   - 整页拖放（PageDropZone）—— 拖到页面任意位置松手即传到当前目录。
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NAlert,
@@ -33,14 +36,17 @@ import {
   errMsg,
   listFiles,
   listFolders,
-  renameFolder
+  permanentStatus,
+  renameFolder,
+  setFolderPermanent
 } from '@/api'
-import type { FileItem, Folder } from '@/api/types'
+import type { FileItem, Folder, PermanentStatus } from '@/api/types'
 import FileTable from '@/components/FileTable.vue'
 import PageDropZone from '@/components/PageDropZone.vue'
 import { useCreateShare } from '@/composables/useCreateShare'
 import { useUploadQueue } from '@/composables/useUploadQueue'
 import { entriesFromFileList, type UploadEntry } from '@/utils/uploadEntries'
+import { formatBytes } from '@/utils/format'
 import { loadOwners, ownersState } from '@/stores/owners'
 
 const route = useRoute()
@@ -239,6 +245,69 @@ function onShareFolder(f: Folder) {
   void share.create('folder', f.id, f.name)
 }
 
+/**
+ * 整个文件夹设置有效期（**递归到其中的所有文件**）。
+ *
+ * 为什么必须二次确认、且要说清三件事：
+ *   1. 范围是"这个目录里的**全部**文件（含子目录）" —— 目录本身没有有效期，
+ *      只有文件有；不说清用户会以为设了个目录属性、或者以为只影响当前这一层；
+ *   2. 永久空间有多少、还剩多少（需求要求提示"永久空间仅有 100G"）；
+ *   3. 改回有期限是按当前保留天数**重新计时**，不是保留原到期时间。
+ *
+ * 两个方向都从这里走：设永久要配额、改回有期限是补救入口（误设后可退）。
+ * 用 dialog 的多个按钮同时给出，比"再点一次就反向"更好猜 ——
+ * 后者没法在界面上表达"当前整体处于哪个状态"（一个目录里可能混着永久与有期限）。
+ */
+async function onFolderPermanent(f: Folder) {
+  let usage: PermanentStatus | null = null
+  try {
+    usage = await permanentStatus()
+  } catch {
+    // 取不到用量不阻断操作，确认框里少一行数字而已。
+  }
+
+  const body = () => {
+    const lines = [
+      `范围：「${f.name}」里的全部文件（含所有子目录），目录本身没有有效期。`,
+    ]
+    if (usage && usage.enabled) {
+      lines.push('', `永久空间共 ${formatBytes(usage.quota_bytes)}，已用 ${formatBytes(usage.used_bytes)}。`)
+    } else if (usage) {
+      lines.push('', '管理员未开放永久保存，只能按保留天数到期。')
+    }
+    lines.push('', '· 设为永久：不再自动清理，需要手动删除，占用永久空间配额。')
+    lines.push('· 改回有期限：按当前的保留天数重新计算到期时间。')
+    return h('div', { style: { whiteSpace: 'pre-line', lineHeight: '1.8' } }, lines.join('\n'))
+  }
+
+  const canPermanent = !usage || usage.enabled
+  dialog.warning({
+    title: '文件夹有效期',
+    content: body,
+    // 两个动作直接摆出来：设永久（要配额）/ 改回有期限（补救）。
+    positiveText: canPermanent ? '设为永久' : '取消',
+    negativeText: '改回有期限',
+    onPositiveClick: canPermanent ? () => applyFolderPermanent(f, true) : undefined,
+    onNegativeClick: () => applyFolderPermanent(f, false)
+  })
+}
+
+/** 执行目录级的有效期设置，并回报受影响文件数。 */
+async function applyFolderPermanent(f: Folder, permanent: boolean) {
+  try {
+    const res = await setFolderPermanent(f.id, permanent)
+    message.success(
+      permanent
+        ? `已将 ${res.affected} 个文件设为永久保存`
+        : `已将 ${res.affected} 个文件改回有期限`
+    )
+    reload()
+  } catch (e) {
+    // 配额不足时后端会返回带具体差额的文案，直接展示即可。
+    message.error(errMsg(e))
+  }
+}
+
 function onSortChange(p: { sort: string; order: 'asc' | 'desc' }) {
   sort.value = p.sort
   order.value = p.order
@@ -410,6 +479,7 @@ onMounted(() => {
         @sort="onSortChange"
         @open-folder="enterFolder"
         @share-folder="onShareFolder"
+        @permanent-folder="onFolderPermanent"
         @rename-folder="openRenameFolder"
         @delete-folder="confirmDeleteFolder"
       />

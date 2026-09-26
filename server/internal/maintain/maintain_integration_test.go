@@ -126,6 +126,10 @@ func (f *fixture) uploadBytes(t *testing.T, name string, data []byte) *model.Fil
 }
 
 // TestFullUploadPipeline 验证「磁盘落盘 + 数据库记录 + 相对路径」三者完全一致。
+// timePtr 取时间地址：model.File.ExpiresAt 是 *time.Time（nil = 永久），
+// 测试里大多要造"有期限"的文件，用这个helper 免得每处写临时变量。
+func timePtr(t time.Time) *time.Time { return &t }
+
 func TestFullUploadPipeline(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -173,7 +177,7 @@ func TestFullUploadPipeline(t *testing.T) {
 	}
 
 	// 到期时间应约为 15 天后
-	days := int(time.Until(file.ExpiresAt).Hours() / 24)
+	days := int(time.Until(*file.ExpiresAt).Hours() / 24)
 	if days < 14 || days > 15 {
 		t.Fatalf("到期时间距今 %d 天，期望约 15 天", days)
 	}
@@ -353,7 +357,7 @@ func TestExpireRespectsConfiguredDays(t *testing.T) {
 	file := f.uploadBytes(t, "三天后到期.txt", []byte("x"))
 
 	// 新上传的文件应按新配置计算到期时间
-	days := int(time.Until(file.ExpiresAt).Hours() / 24)
+	days := int(time.Until(*file.ExpiresAt).Hours() / 24)
 	if days < 2 || days > 3 {
 		t.Fatalf("到期时间距今 %d 天，期望约 3 天", days)
 	}
@@ -391,7 +395,7 @@ func TestRestoreThenExpireAgain(t *testing.T) {
 
 	// 恢复（模拟管理员操作：到期时间 = 现在 + retention_days）
 	newExpiry := time.Now().UTC().AddDate(0, 0, f.set.Get().RetentionDays)
-	if err := f.st.RestoreFile(ctx, file.ID, newExpiry); err != nil {
+	if err := f.st.RestoreFile(ctx, file.ID, timePtr(newExpiry)); err != nil {
 		t.Fatalf("RestoreFile: %v", err)
 	}
 	got, _ := f.st.GetFile(ctx, file.ID)

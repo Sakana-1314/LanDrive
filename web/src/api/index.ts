@@ -14,6 +14,7 @@ import type {
   OrphanReport,
   OwnerAggregate,
   Paged,
+  PermanentStatus,
   PreviewInfo,
   Settings,
   Share,
@@ -340,6 +341,33 @@ export async function renameFile(id: number, name: string): Promise<FileItem> {
 
 export async function deleteFile(id: number): Promise<void> {
   await http.delete(`/files/${id}`)
+}
+
+/** 查询全站永久空间的使用情况（二次确认里展示"还剩多少"）。 */
+export async function permanentStatus(): Promise<PermanentStatus> {
+  const { data } = await http.get<PermanentStatus>('/files/permanent')
+  return data
+}
+
+/**
+ * 设置单个文件的有效期。
+ * permanent=true → 设为永久（受全站配额约束）；false → 改回按保留天数到期。
+ */
+export async function setFilePermanent(id: number, permanent: boolean): Promise<FileItem> {
+  const { data } = await http.put<FileItem>(`/files/${id}/permanent`, { permanent })
+  return data
+}
+
+/**
+ * 把整个文件夹（**递归到其中所有文件**）设为永久或改回有期限。
+ * 返回受影响的文件数——目录本身没有有效期，只有文件有。
+ */
+export async function setFolderPermanent(
+  id: number,
+  permanent: boolean
+): Promise<{ ok: boolean; affected: number; permanent: boolean }> {
+  const { data } = await http.put(`/folders/${id}/permanent`, { permanent })
+  return data
 }
 
 /** 取文件内容为 Blob（预览用）。 */
