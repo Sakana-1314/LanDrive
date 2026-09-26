@@ -66,18 +66,25 @@ func New(h *handler.Handler, cfg *config.Config) *gin.Engine {
 			// 置顶是"每人各一份"的个人偏好，因此放在登录档而非管理员档。
 			authed.PUT("/files/owners/:id/pin", h.PinOwner)
 			authed.DELETE("/files/owners/:id/pin", h.UnpinOwner)
+			// 永久空间状况：必须注册在 /files/:id 之前，否则 "permanent"
+			// 会被当成一个 id 去匹配（gin 的静态段优先，但显式排前面更不容易误读）。
+			authed.GET("/files/permanent", h.PermanentStatus)
 			authed.GET("/files/:id", h.GetFile)
 			authed.GET("/files/:id/preview", h.PreviewInfo)
 			authed.GET("/files/:id/content", h.ServeContent)
 			authed.GET("/files/:id/download", h.Download)
 			authed.PATCH("/files/:id", h.RenameFile)
 			authed.DELETE("/files/:id", h.DeleteFile)
+			// 有效期：设永久 / 改回有期限（二次确认在前端）
+			authed.PUT("/files/:id/permanent", h.SetFilePermanent)
 
 			// 文件夹
 			authed.GET("/folders", h.ListFolders)
 			authed.POST("/folders", h.CreateFolder)
 			authed.PATCH("/folders/:id", h.RenameFolder)
 			authed.DELETE("/folders/:id", h.DeleteFolder)
+			// 整个文件夹（递归到文件）设永久 / 改回有期限
+			authed.PUT("/folders/:id/permanent", h.SetFolderPermanent)
 
 			// 分享：所有人都能看到所有人创建的分享（需求明确要求）
 			authed.GET("/shares", h.ListShares)

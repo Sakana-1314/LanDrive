@@ -64,26 +64,36 @@ type File struct {
 	OwnerID int64 `json:"owner_id"`
 	// FolderID 所属文件夹；0 表示用户根目录（故意用 0 而不是 NULL，
 	// 详见 0003 迁移里的说明）。
-	FolderID    int64      `json:"folder_id"`
-	OriginalNam string     `json:"original_name"`
-	Ext         string     `json:"ext"`
-	SizeBytes   int64      `json:"size_bytes"`
-	Mime        string     `json:"mime"`
-	SHA256      string     `json:"sha256"`
-	RelPath     string     `json:"rel_path"`
-	Status      string     `json:"status"`
-	ExpiresAt   time.Time  `json:"expires_at"`
-	DeletedAt   *time.Time `json:"deleted_at"`
-	PurgeAt     *time.Time `json:"purge_at"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	FolderID    int64  `json:"folder_id"`
+	OriginalNam string `json:"original_name"`
+	Ext         string `json:"ext"`
+	SizeBytes   int64  `json:"size_bytes"`
+	Mime        string `json:"mime"`
+	SHA256      string `json:"sha256"`
+	RelPath     string `json:"rel_path"`
+	Status      string `json:"status"`
+	// ExpiresAt 到期标记删除的时间点。**nil 表示永久**：该文件不参与到期扫描，
+	// 只能由删除 / 管理员彻底删除终结。与 shares.ExpiresAt 是同一套语义。
+	//
+	// 用 nil 而不是零值 time.Time 或哨兵时间：零值会被 `expires_at <= now`
+	// 判成"早就过期"，哨兵时间则要求每处比较都记得排除它 —— 两者都是
+	// "某处忘了处理就静默出错"的形状。指针 + 显式 nil 判断不会忘。
+	ExpiresAt *time.Time `json:"expires_at"`
+	DeletedAt *time.Time `json:"deleted_at"`
+	PurgeAt   *time.Time `json:"purge_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 
 	// 以下字段来自 users 联查，便于前端直接展示，不落 files 表。
 	OwnerName       string `json:"owner_name"`
 	OwnerEmployeeNo string `json:"owner_employee_no"`
 
 	// DaysLeft 距到期标记删除的剩余天数（负数表示已过期）。由 handler 计算。
+	// Permanent 为 true 时无意义（前端看 Permanent 决定显示"永久"）。
 	DaysLeft int `json:"days_left"`
+	// Permanent 表示该文件已被设为永久（expires_at IS NULL）。
+	// 前端据此显示「永久」角标，而不是把 days_left=0 显示成"今天到期"。
+	Permanent bool `json:"permanent"`
 	// IsMine / CanEdit 由 handler 按当前登录者计算。
 	IsMine  bool `json:"is_mine"`
 	CanEdit bool `json:"can_edit"`

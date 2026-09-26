@@ -30,14 +30,28 @@ export interface FileItem {
   sha256: string
   rel_path: string
   status: FileStatus
-  expires_at: string
+  /** 到期时间；**null 表示永久**（不参与自动清理）。 */
+  expires_at: string | null
   deleted_at: string | null
   purge_at: string | null
+  /** 距到期天数；永久文件恒为 0（看 permanent 判断，不要用它推断到期）。 */
   days_left: number
+  /** 是否已设为永久（expires_at 为 null）。 */
+  permanent: boolean
   is_mine: boolean
   can_edit: boolean
   created_at: string
   updated_at: string
+}
+
+/** 全站永久空间的使用情况。 */
+export interface PermanentStatus {
+  /** 管理员是否开放了永久功能（配额为 0 即关闭）。 */
+  enabled: boolean
+  quota_bytes: number
+  used_bytes: number
+  /** 剩余可用；已超出配额时为 0（不会是负数）。 */
+  free_bytes: number
 }
 
 export interface UploadSession {

@@ -108,6 +108,38 @@ func (s *Service) List(ctx context.Context, in ListInput) (*Listing, error) {
 	return out, nil
 }
 
+// ResolveDir 取某个目录记录及其磁盘相对路径，供"对整个目录批量操作"使用
+// （当前用于递归设置永久有效期）。
+//
+// 权限：管理员可操作任意目录，普通用户只能动自己的 —— 与建/改名/删除同一套
+// 判定（canModify），避免出现"能改别人目录里的文件有效期"这种越权。
+func (s *Service) ResolveDir(ctx context.Context, actor *model.User, id int64) (*model.Folder, string, error) {
+	if actor == nil {
+		return nil, "", ErrForbidden
+	}
+	f, err := s.store.GetFolder(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	if f.Status != model.FolderActive {
+		return nil, "", fmt.Errorf("%w: 文件夹已被删除", store.ErrState)
+	}
+	if !canModify(actor, f.OwnerID) {
+		return nil, "", fmt.Errorf("%w: 只能操作自己的文件夹", ErrForbidden)
+	}
+	u, err := s.store.GetUserByID(ctx, f.OwnerID)
+	if err != nil {
+		return nil, "", err
+	}
+	// 与 Delete 同一套算法（storage.FolderDirRel + UserDirRel），
+	// 保证"批改文件有效期"的范围和"删目录时软删文件"的范围完全一致。
+	dirRel, err := storage.FolderDirRel(storage.UserDirRel(u.EmployeeNo), f.Path)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, dirRel, nil
+}
+
 // CreateInput 建目录的入参。
 type CreateInput struct {
 	Actor    *model.User

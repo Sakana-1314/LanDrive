@@ -40,9 +40,14 @@ type httpEnv struct {
 	st     *store.Store
 	disk   *storage.Storage
 	maint  *maintain.Service
+	set    *settings.Service
 	user   *model.User
 	token  string
 }
+
+// timePtr 取时间地址：model.File.ExpiresAt 是 *time.Time（nil = 永久），
+// 测试里大多要造"有期限"的文件，用这个helper 免得每处写一个临时变量。
+func timePtr(t time.Time) *time.Time { return &t }
 
 func newHTTPEnv(t *testing.T) *httpEnv {
 	t.Helper()
@@ -131,12 +136,71 @@ func (e *httpEnv) mkFile(t *testing.T, name, ext, content string) *model.File {
 		OwnerID: e.user.ID, OriginalNam: name, Ext: ext, SizeBytes: int64(len(content)),
 		Mime: storage.MIMEFor(ext, name), SHA256: strings.Repeat("a", 64),
 		RelPath: e.user.DirRel + "/tmp", Status: model.StatusActive,
-		ExpiresAt: time.Now().UTC().AddDate(0, 0, 15),
+		ExpiresAt: timePtr(time.Now().UTC().AddDate(0, 0, 15)),
 	}
 	if err := e.st.CreateFile(ctx, f); err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
 	rel := storage.FileRel(e.user.DirRel, f.ID, ext)
+	if _, err := e.disk.WriteChunk(rel, strings.NewReader(content), 1<<20); err != nil {
+		t.Fatalf("WriteChunk: %v", err)
+	}
+	if err := e.st.FinishFile(ctx, f.ID, rel, strings.Repeat("a", 64), int64(len(content))); err != nil {
+		t.Fatalf("FinishFile: %v", err)
+	}
+	got, err := e.st.GetFileForShare(ctx, f.ID)
+	if err != nil {
+		t.Fatalf("GetFileForShare: %v", err)
+	}
+	return got
+}
+
+// createFolder 通过真实接口建目录（走完整校验与磁盘落盘）。
+func (e *httpEnv) createFolder(t *testing.T, name string, parentID int64) *model.Folder {
+	t.Helper()
+	body := `{"name":"` + name + `","parent_id":` + itoa(parentID) + `}`
+	w := e.do(t, "POST", "/api/folders", e.token, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("建目录失败 code=%d body=%s", w.Code, w.Body.String())
+	}
+	var f model.Folder
+	if err := json.Unmarshal(w.Body.Bytes(), &f); err != nil {
+		t.Fatalf("解析目录: %v", err)
+	}
+	return &f
+}
+
+// mkFileInFolder 在指定目录里建一条真实落盘的文件。
+//
+// 与 mkFile 的区别：mkFile 落在一个固定路径，用来测普通文件；
+// 目录级"递归到文件"必须让文件真的位于目录树下（rel_path 前缀匹配），
+// 否则测出来的是"没递归也通过"。
+func (e *httpEnv) mkFileInFolder(t *testing.T, name, ext, content string, folderID int64) *model.File {
+	t.Helper()
+	ctx := context.Background()
+	folder, err := e.st.GetFolder(ctx, folderID)
+	if err != nil {
+		t.Fatalf("读取目录 %d: %v", folderID, err)
+	}
+	owner, err := e.st.GetUserByID(ctx, folder.OwnerID)
+	if err != nil {
+		t.Fatalf("读取属主: %v", err)
+	}
+	dirRel, err := storage.FolderDirRel(storage.UserDirRel(owner.EmployeeNo), folder.Path)
+	if err != nil {
+		t.Fatalf("算目录相对路径: %v", err)
+	}
+	f := &model.File{
+		OwnerID: folder.OwnerID, FolderID: folder.ID,
+		OriginalNam: name, Ext: ext, SizeBytes: int64(len(content)),
+		Mime: storage.MIMEFor(ext, name), SHA256: strings.Repeat("a", 64),
+		RelPath: dirRel, Status: model.StatusActive,
+		ExpiresAt: timePtr(time.Now().UTC().AddDate(0, 0, 15)),
+	}
+	if err := e.st.CreateFile(ctx, f); err != nil {
+		t.Fatalf("CreateFile: %v", err)
+	}
+	rel := storage.FileRel(dirRel, f.ID, ext)
 	if _, err := e.disk.WriteChunk(rel, strings.NewReader(content), 1<<20); err != nil {
 		t.Fatalf("WriteChunk: %v", err)
 	}
@@ -839,6 +903,162 @@ func TestFolderDeletePreservesFileBytes(t *testing.T) {
 	for _, m := range rep.Missing {
 		if m == done.File.RelPath {
 			t.Fatalf("一致性扫描报缺失（数据破损）: %s", m)
+		}
+	}
+}
+
+// TestPermanentExpiryAndQuota 守住「文件有效期设为永久」这套语义。
+//
+// 需求：支持将文件有效期设成永久，但要二次确认（前端负责）并提示永久空间
+// 只有 100G（可配置）；支持把整个文件夹**递归到文件**设成永久。
+//
+// 服务端要守的：
+//  1. 设永久 = expires_at 置空，返回 permanent=true 且 days_left 归零；
+//  2. 到期扫描**不再碰**永久文件（这是"永久"的意义所在，最该测）；
+//  3. 永久配额是**全站共享**的，超了要硬拒并给出差额；
+//  4. 目录级设置递归到子目录里的文件；
+//  5. 改回有期限能重新计时（误设后的补救）。
+func TestPermanentExpiryAndQuota(t *testing.T) {
+	e := newHTTPEnv(t)
+	ctx := context.Background()
+
+	// 配额先设成 1MB，方便造"放不下"的场景（免得真造 100G）。
+	oneMB := 1
+	if _, err := e.set.Update(ctx, settings.Patch{PermanentQuotaMB: &oneMB}); err != nil {
+		t.Fatalf("设置永久配额: %v", err)
+	}
+
+	small := e.mkFile(t, "小文件.txt", ".txt", strings.Repeat("s", 1000))
+	big := e.mkFile(t, "大文件.txt", ".txt", strings.Repeat("b", 2<<20)) // 2MB > 1MB 配额
+
+	// --- 1) 设永久成功 ---
+	{
+		w := e.do(t, "PUT", "/api/files/"+itoa(small.ID)+"/permanent", e.token, `{"permanent":true}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("设永久失败 code=%d body=%s", w.Code, w.Body.String())
+		}
+		var f model.File
+		if err := json.Unmarshal(w.Body.Bytes(), &f); err != nil {
+			t.Fatalf("解析响应: %v", err)
+		}
+		if !f.Permanent || f.ExpiresAt != nil {
+			t.Fatalf("设永久后应 permanent=true 且 expires_at 为空，实际 permanent=%v expires_at=%v", f.Permanent, f.ExpiresAt)
+		}
+		if f.DaysLeft != 0 {
+			t.Fatalf("永久文件 days_left 应为 0，实际 %d", f.DaysLeft)
+		}
+	}
+
+	// --- 2) 到期扫描不再碰永久文件（把它的到期时间当作"早就过了"也一样） ---
+	{
+		// 直接把 expires_at 改成过去：永久文件本来就是 NULL，这里改的是
+		// 另一条有期限的文件，用来确认扫描仍然正常工作。
+		past := time.Now().UTC().Add(-48 * time.Hour)
+		expiring := e.mkFile(t, "会过期.txt", ".txt", strings.Repeat("e", 100))
+		if _, err := e.st.DB().ExecContext(ctx, `UPDATE files SET expires_at = ? WHERE id = ?`, past, expiring.ID); err != nil {
+			t.Fatalf("准备过期数据: %v", err)
+		}
+		if n := e.maint.RunExpire(ctx); n < 1 {
+			t.Fatalf("到期扫描应至少标记 1 个文件，实际 %d", n)
+		}
+		// 永久文件必须仍是 active —— 若被误清理，"永久"就名不副实。
+		after, err := e.st.GetFile(ctx, small.ID)
+		if err != nil {
+			t.Fatalf("读取永久文件: %v", err)
+		}
+		if after.Status != model.StatusActive || after.ExpiresAt != nil {
+			t.Fatalf("永久文件不应被到期扫描影响，实际 status=%s expires_at=%v", after.Status, after.ExpiresAt)
+		}
+	}
+
+	// --- 3) 配额硬拒：2MB 的文件放不进只剩 ~1MB 的池 ---
+	{
+		w := e.do(t, "PUT", "/api/files/"+itoa(big.ID)+"/permanent", e.token, `{"permanent":true}`)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("超出永久配额应返回 409，实际 %d body=%s", w.Code, w.Body.String())
+		}
+		// 文案要告诉用户还差多少，否则他不知道怎么办。
+		if !strings.Contains(w.Body.String(), "还需") {
+			t.Fatalf("配额不足的提示应给出差额，实际 %s", w.Body.String())
+		}
+		// 拒绝后该文件不应变成永久。
+		got, _ := e.st.GetFile(ctx, big.ID)
+		if got.ExpiresAt == nil {
+			t.Fatalf("配额不足时不应把文件设成永久")
+		}
+	}
+
+	// --- 4) 目录级递归：子目录里的文件也要被设成永久 ---
+	{
+		quota := 10
+		if _, err := e.set.Update(ctx, settings.Patch{PermanentQuotaMB: &quota}); err != nil {
+			t.Fatalf("放宽配额: %v", err)
+		}
+		// 建 报表/2026 两级目录，文件分别落在两级。
+		top := e.createFolder(t, "报表", 0)
+		sub := e.createFolder(t, "2026", top.ID)
+		inTop := e.mkFileInFolder(t, "顶层.txt", ".txt", strings.Repeat("t", 100), top.ID)
+		inSub := e.mkFileInFolder(t, "子层.txt", ".txt", strings.Repeat("u", 100), sub.ID)
+
+		w := e.do(t, "PUT", "/api/folders/"+itoa(top.ID)+"/permanent", e.token, `{"permanent":true}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("目录设永久失败 code=%d body=%s", w.Code, w.Body.String())
+		}
+		var res struct {
+			Affected  int  `json:"affected"`
+			Permanent bool `json:"permanent"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatalf("解析响应: %v", err)
+		}
+		// 顶层 + 子层各 1 个文件，递归范围应是 2（不含此前手动设永久的那 1 个）。
+		if res.Affected != 2 {
+			t.Fatalf("目录递归应影响 2 个文件（含子目录），实际 %d", res.Affected)
+		}
+		for _, id := range []int64{inTop.ID, inSub.ID} {
+			got, err := e.st.GetFile(ctx, id)
+			if err != nil {
+				t.Fatalf("读取文件 %d: %v", id, err)
+			}
+			if got.ExpiresAt != nil {
+				t.Fatalf("目录设永久后文件 %d 仍是有期限（递归没覆盖到子目录？）", id)
+			}
+		}
+	}
+
+	// --- 5) 改回有期限：按当前保留天数重新计时 ---
+	{
+		w := e.do(t, "PUT", "/api/files/"+itoa(small.ID)+"/permanent", e.token, `{"permanent":false}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("改回有期限失败 code=%d body=%s", w.Code, w.Body.String())
+		}
+		var f model.File
+		if err := json.Unmarshal(w.Body.Bytes(), &f); err != nil {
+			t.Fatalf("解析响应: %v", err)
+		}
+		if f.Permanent || f.ExpiresAt == nil {
+			t.Fatalf("改回有期限后应有 expires_at，实际 permanent=%v", f.Permanent)
+		}
+		// 应约等于 retention_days 天后（默认 15）。
+		wantDays := e.set.Get().RetentionDays
+		if f.DaysLeft < wantDays-1 || f.DaysLeft > wantDays {
+			t.Fatalf("改回有期限后剩余天数应约 %d 天，实际 %d", wantDays, f.DaysLeft)
+		}
+	}
+
+	// --- 6) 配额为 0 = 关闭永久功能 ---
+	{
+		zero := 0
+		if _, err := e.set.Update(ctx, settings.Patch{PermanentQuotaMB: &zero}); err != nil {
+			t.Fatalf("关闭永久功能: %v", err)
+		}
+		w := e.do(t, "PUT", "/api/files/"+itoa(big.ID)+"/permanent", e.token, `{"permanent":true}`)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("关闭永久功能后应返回 403，实际 %d body=%s", w.Code, w.Body.String())
+		}
+		// 关闭状态下改成有期限仍应可用（那是"退回"，不是"申请额度"）。
+		if w := e.do(t, "PUT", "/api/files/"+itoa(big.ID)+"/permanent", e.token, `{"permanent":false}`); w.Code != http.StatusOK {
+			t.Fatalf("关闭永久功能后改回有期限仍应成功，实际 %d", w.Code)
 		}
 	}
 }

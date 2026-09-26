@@ -1,0 +1,22 @@
+-- 0004：文件有效期支持「永久」。
+--
+-- 改动只有一处：files.expires_at 由 NOT NULL 改为可空，NULL 表示**永久**。
+--
+-- 为什么用 NULL 而不是哨兵时间（如 9999-12-31）：
+--   1. 到期扫描的条件是 `expires_at <= now`，哨兵时间会一直参与比较；
+--      真到了 9999 年整表一起到期，是个埋着的地雷；
+--   2. 统计口径（还剩 7 天到期、已过期未清理）都要额外排除哨兵值，
+--      每处都得记得写，漏一处就出错；NULL 只要 `IS NOT NULL` 一次判断；
+--   3. shares 表早就是 NULL=永久 的语义，文件沿用同一套读起来一致。
+--
+-- MODIFY 而不是 DROP+ADD：需要保留已有数据。MySQL 8 与 MariaDB 11 均支持
+-- 这条标准写法（AGENTS.md 要求两版都能跑）。
+--
+-- 索引不用动：0001 里已有的 idx_files_status_expires (status, expires_at)
+-- 正好服务两条关键查询 ——
+--   * 到期扫描 `status='active' AND expires_at <= ?`：NULL 不会被 `<=` 命中，
+--     永久文件天然不参与扫描（语义正确，无需额外排除）；
+--   * 永久配额汇总 `status='active' AND expires_at IS NULL`：同一索引前缀即可。
+-- 特意**不**再加一条 (status, expires_at) 索引：那是完全重复的索引，
+-- 只会拖慢写入，对查询没有任何帮助。
+ALTER TABLE files MODIFY COLUMN expires_at DATETIME NULL COMMENT '到期标记删除的时间点；NULL 表示永久，不参与到期扫描';

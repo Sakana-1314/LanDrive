@@ -134,11 +134,19 @@ func (s *Service) Decorate(f *model.File, actor *model.User) model.File {
 	return s.decorate(f, actor)
 }
 
-// decorate 计算 days_left / is_mine / can_edit。
+// decorate 计算 days_left / permanent / is_mine / can_edit。
 func (s *Service) decorate(f *model.File, actor *model.User) model.File {
 	out := *f
-	now := time.Now().UTC()
-	out.DaysLeft = int(math.Ceil(out.ExpiresAt.Sub(now).Hours() / 24))
+	out.Permanent = out.ExpiresAt == nil
+	if out.Permanent {
+		// 永久文件没有"还剩几天"的概念。留 0 而不是算成一个巨大数字：
+		// 前端看 Permanent 决定显示「永久」，0 只作为"该字段无意义"的哨兵；
+		// 若算成 MaxInt，按到期时间排序时永久文件会冒到最前，与直觉相反。
+		out.DaysLeft = 0
+	} else {
+		now := time.Now().UTC()
+		out.DaysLeft = int(math.Ceil(out.ExpiresAt.Sub(now).Hours() / 24))
+	}
 	if actor != nil {
 		out.IsMine = out.OwnerID == actor.ID
 		// 管理员可管理任意文件；普通用户只能动自己上传的、且仍在有效期内的文件。
@@ -209,8 +217,14 @@ func (s *Service) Restore(ctx context.Context, id int64, actor *model.User) (*mo
 	if f.Status != model.StatusTrashed {
 		return nil, fmt.Errorf("%w: 该文件不在回收站中", store.ErrState)
 	}
-	set := s.set.Get()
-	expiresAt := time.Now().UTC().Truncate(time.Second).AddDate(0, 0, set.RetentionDays)
+	// 原来是永久文件就**保持永久**（expiresAt=nil）：软删只是状态变化，
+	// 恢复的语义是"回到删除前的样子"，顺手把它降级成有期限是越权改动用户的设定。
+	// 只有原本就有期限的文件才按当前保留天数重算 —— 与"重新开始计时"的既有约定一致。
+	var expiresAt *time.Time
+	if f.ExpiresAt != nil {
+		at := time.Now().UTC().Truncate(time.Second).AddDate(0, 0, s.set.Get().RetentionDays)
+		expiresAt = &at
+	}
 	if err := s.store.RestoreFile(ctx, id, expiresAt); err != nil {
 		return nil, err
 	}
@@ -278,6 +292,146 @@ func (s *Service) checkCanModify(f *model.File, actor *model.User) error {
 		return fmt.Errorf("%w: 文件已被删除，无法操作", store.ErrState)
 	}
 	return nil
+}
+
+// ErrPermanentDisabled 表示管理员关闭了永久功能（配额为 0）。
+var ErrPermanentDisabled = errors.New("管理员未开放永久保存")
+
+// ErrPermanentQuota 表示永久空间不足。错误信息里带上具体差额，供前端直接展示。
+var ErrPermanentQuota = errors.New("永久空间不足")
+
+// PermanentStatus 是"永久空间当前状况"，前端据此在二次确认里提示用户。
+type PermanentStatus struct {
+	Enabled    bool  `json:"enabled"`
+	QuotaBytes int64 `json:"quota_bytes"`
+	UsedBytes  int64 `json:"used_bytes"`
+	FreeBytes  int64 `json:"free_bytes"`
+}
+
+// PermanentStatusOf 返回全站永久空间的使用情况。
+//
+// UsedBytes 可能大于 QuotaBytes（管理员把配额调低过）：此时 FreeBytes 记 0，
+// 而不是给一个负数 —— 前端拿负数去算进度条会画出诡异的图形。
+func (s *Service) PermanentStatusOf(ctx context.Context) (PermanentStatus, error) {
+	cfg := s.set.Get()
+	used, err := s.store.PermanentUsage(ctx)
+	if err != nil {
+		return PermanentStatus{}, err
+	}
+	out := PermanentStatus{
+		Enabled:    cfg.PermanentEnabled(),
+		QuotaBytes: cfg.PermanentQuotaBytes(),
+		UsedBytes:  used,
+	}
+	if out.QuotaBytes > used {
+		out.FreeBytes = out.QuotaBytes - used
+	}
+	return out, nil
+}
+
+// SetPermanent 把单个文件设为永久（permanent=true）或改为有期限。
+//
+// 权限与改名/删除一致（属主或管理员），且只对 active 文件开放：
+// 回收站里的文件先恢复再说 —— 否则用户在回收站里设了永久、却因为文件
+// 马上被清理而毫无意义，白等一场。
+//
+// 改为有期限时按当前 retention_days 重新计算到期时间（与"恢复"同一口径）。
+func (s *Service) SetPermanent(ctx context.Context, id int64, permanent bool, actor *model.User) (*model.File, error) {
+	f, err := s.store.GetFile(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkCanModify(f, actor); err != nil {
+		return nil, err
+	}
+	var expiresAt *time.Time
+	if permanent {
+		if err := s.ensurePermanentFits(ctx, 1, f.SizeBytes); err != nil {
+			return nil, err
+		}
+		expiresAt = nil
+	} else {
+		at := time.Now().UTC().Truncate(time.Second).AddDate(0, 0, s.set.Get().RetentionDays)
+		expiresAt = &at
+	}
+	if _, err := s.store.SetExpiry(ctx, id, expiresAt); err != nil {
+		return nil, err
+	}
+	updated, err := s.store.GetFile(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := s.decorate(updated, actor)
+	return &out, nil
+}
+
+// SetPermanentUnderFolder 把某个目录（**递归到文件**）下的所有文件设为永久或改为有期限。
+//
+// 只影响目录树下**当前是 active** 的文件：回收站里的不动，避免把一堆
+// 待清理的文件也变成永久。
+//
+// 返回受影响的文件数。目录本身没有"永久"这个属性 —— 永久是文件的属性，
+// 目录只是个范围，因此这里只改文件、不动 folders 表。
+func (s *Service) SetPermanentUnderFolder(ctx context.Context, ownerID int64, dirRel string, permanent bool, actor *model.User) (int64, error) {
+	var expiresAt *time.Time
+	if permanent {
+		// 配额按"本次会新增多少"算：已经是永久的不重复计入。
+		add, err := s.store.PermanentizableBytes(ctx, ownerID, dirRel)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.ensurePermanentFits(ctx, 1, add); err != nil {
+			return 0, err
+		}
+	} else {
+		at := time.Now().UTC().Truncate(time.Second).AddDate(0, 0, s.set.Get().RetentionDays)
+		expiresAt = &at
+	}
+	return s.store.SetExpiryUnderPath(ctx, ownerID, dirRel, expiresAt)
+}
+
+// ensurePermanentFits 校验"再永久化 addBytes"是否放得下。
+//
+// 配额不足时返回的错误里带完整数字（已用 / 上限 / 还差多少），
+// 让前端能直接告诉用户"还差多少" —— 只说"空间不足"用户不知道该怎么办。
+func (s *Service) ensurePermanentFits(ctx context.Context, fileCount int, addBytes int64) error {
+	cfg := s.set.Get()
+	if !cfg.PermanentEnabled() {
+		return ErrPermanentDisabled
+	}
+	used, err := s.store.PermanentUsage(ctx)
+	if err != nil {
+		return err
+	}
+	// addBytes <= 0（比如目录里全是已永久的文件、或空目录）时不需要占用新额度，
+	// 但仍要过 enabled 这道闸：关闭永久功能时不该允许任何"设为永久"的操作。
+	if addBytes > 0 && !cfg.PermanentFits(used, addBytes) {
+		quota := cfg.PermanentQuotaBytes()
+		short := used + addBytes - quota
+		if short < 0 {
+			short = 0
+		}
+		return fmt.Errorf("%w：已用 %s / 上限 %s，还需 %s（本次涉及 %d 个文件）",
+			ErrPermanentQuota, fmtBytesCN(used), fmtBytesCN(quota), fmtBytesCN(short), fileCount)
+	}
+	return nil
+}
+
+// fmtBytesCN 生成人类可读的体积文案（与 handler.fmtBytes 同一套进位规则）。
+//
+// 放在 files 包而不是复用 handler 的：错误信息要在这里就拼好，
+// 而 handler 不能反向依赖 —— 两处实现保持一致即可（口径都是 1024 进位）。
+func fmtBytesCN(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // cleanupEmptyDir 在文件被删除后清理其所在的空目录（数据根目录本身不删）。

@@ -71,7 +71,7 @@ func mkFile(t *testing.T, st *store.Store, disk *storage.Storage, owner *model.U
 		OwnerID: owner.ID, OriginalNam: name, Ext: ext, SizeBytes: 5,
 		Mime: storage.MIMEFor(ext, name), SHA256: strings.Repeat("a", 64),
 		RelPath: owner.DirRel + "/tmp-" + name, Status: model.StatusActive,
-		ExpiresAt: time.Now().UTC().AddDate(0, 0, 15),
+		ExpiresAt: timePtr(time.Now().UTC().AddDate(0, 0, 15)),
 	}
 	if err := st.CreateFile(ctx, f); err != nil {
 		t.Fatalf("CreateFile: %v", err)
@@ -90,6 +90,10 @@ func mkFile(t *testing.T, st *store.Store, disk *storage.Storage, owner *model.U
 	}
 	return got
 }
+
+// timePtr 取时间地址：model.File.ExpiresAt 是 *time.Time（nil = 永久），
+// 测试里大多要造"有期限"的文件，用这个helper 免得每处写一个临时变量。
+func timePtr(t time.Time) *time.Time { return &t }
 
 func intp(v int) *int { return &v }
 
@@ -172,7 +176,7 @@ func TestShareReportsDeletedTarget(t *testing.T) {
 	}
 
 	// 管理员恢复 → 同一条链接应自动恢复可用
-	if err := st.RestoreFile(ctx, f.ID, time.Now().UTC().AddDate(0, 0, 15)); err != nil {
+	if err := st.RestoreFile(ctx, f.ID, timePtr(time.Now().UTC().AddDate(0, 0, 15))); err != nil {
 		t.Fatalf("RestoreFile: %v", err)
 	}
 	res, err = svc.Resolve(ctx, sh.Token)

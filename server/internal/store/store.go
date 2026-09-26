@@ -278,6 +278,19 @@ func nullTime(t sql.NullTime) *time.Time {
 	return &v
 }
 
+// expiresArg 把可空的到期时间转成可直接绑定给 SQL 的值。
+//
+// 为什么要单独一个函数：`*time.Time` 直接当参数传给 database/sql 时，
+// nil 指针会以 NULL 绑定（结果正确），但写出来是 `f.ExpiresAt`，
+// 读代码的人得自己推"这里到底会不会是 NULL"。显式转换让「永久 = NULL」
+// 这个语义在每个写库的地方都看得见。
+func expiresArg(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.UTC()
+}
+
 // nullID 把 sql.NullInt64 转为 *int64。
 func nullID(v sql.NullInt64) *int64 {
 	if !v.Valid {

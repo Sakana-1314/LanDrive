@@ -31,6 +31,10 @@ const envDSN = "LANDRIVE_TEST_MYSQL_DSN"
 // 若共用同一个库，各包的「清空业务表」会互相破坏对方的数据。
 const pkgDBTag = "store"
 
+// timePtr 取时间地址：model.File.ExpiresAt 是 *time.Time（nil = 永久），
+// 测试里大多要造"有期限"的文件，用这个helper 免得每处写一个临时变量。
+func timePtr(t time.Time) *time.Time { return &t }
+
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv(envDSN))
@@ -202,7 +206,7 @@ func TestFileRepositoryLifecycle(t *testing.T) {
 		OwnerID: owner.ID, OriginalNam: "报表.xlsx", Ext: ".xlsx",
 		SizeBytes: 2048, Mime: "application/octet-stream", SHA256: strings.Repeat("a", 64),
 		RelPath: "users/" + itoaTest(owner.ID) + "/1.xlsx",
-		Status:  model.StatusActive, ExpiresAt: now2,
+		Status:  model.StatusActive, ExpiresAt: timePtr(now2),
 	}
 	if err := st.CreateFile(ctx, f); err != nil {
 		t.Fatalf("CreateFile: %v", err)
@@ -296,14 +300,14 @@ func TestFileRepositoryLifecycle(t *testing.T) {
 
 	// 恢复：到期时间重算，回收站字段清空
 	newExpiry := now.AddDate(0, 0, 15)
-	if err := st.RestoreFile(ctx, f.ID, newExpiry); err != nil {
+	if err := st.RestoreFile(ctx, f.ID, timePtr(newExpiry)); err != nil {
 		t.Fatalf("RestoreFile: %v", err)
 	}
 	got, _ = st.GetFile(ctx, f.ID)
 	if got.Status != model.StatusActive || got.DeletedAt != nil || got.PurgeAt != nil {
 		t.Fatalf("恢复后状态不正确: %+v", got)
 	}
-	if !got.ExpiresAt.Equal(newExpiry) {
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(newExpiry) {
 		t.Fatalf("恢复后到期时间 = %v，期望 %v", got.ExpiresAt, newExpiry)
 	}
 
@@ -568,7 +572,7 @@ func TestForeignKeysProtectIntegrity(t *testing.T) {
 	f := &model.File{
 		OwnerID: owner.ID, OriginalNam: "x.txt", Ext: ".txt", SizeBytes: 1,
 		RelPath: "users/" + itoaTest(owner.ID) + "/1.txt",
-		Status:  model.StatusActive, ExpiresAt: time.Now().UTC().AddDate(0, 0, 15),
+		Status:  model.StatusActive, ExpiresAt: timePtr(time.Now().UTC().AddDate(0, 0, 15)),
 	}
 	if err := st.CreateFile(ctx, f); err != nil {
 		t.Fatalf("CreateFile: %v", err)
@@ -724,7 +728,7 @@ func TestOwnerUsageAggregates(t *testing.T) {
 			Ext: ".bin", SizeBytes: size, Mime: "application/octet-stream",
 			SHA256:  strings.Repeat("a", 64),
 			RelPath: dir + "/" + itoaTest(int64(i+1)) + ".bin",
-			Status:  model.StatusActive, ExpiresAt: time.Now().UTC().AddDate(0, 0, 15),
+			Status:  model.StatusActive, ExpiresAt: timePtr(time.Now().UTC().AddDate(0, 0, 15)),
 		}
 		if err := st.CreateFile(ctx, f); err != nil {
 			t.Fatalf("CreateFile: %v", err)
@@ -842,7 +846,7 @@ func TestSoftDeleteAllByOwner(t *testing.T) {
 			OwnerID: u.ID, OriginalNam: name, Ext: ".bin", SizeBytes: 10,
 			Mime: "application/octet-stream", SHA256: strings.Repeat("a", 64),
 			RelPath: u.DirRel + "/" + name, Status: model.StatusActive,
-			ExpiresAt: time.Now().UTC().AddDate(0, 0, 15),
+			ExpiresAt: timePtr(time.Now().UTC().AddDate(0, 0, 15)),
 		}
 		if err := st.CreateFile(ctx, f); err != nil {
 			t.Fatalf("CreateFile(%s): %v", name, err)
