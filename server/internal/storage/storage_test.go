@@ -479,6 +479,48 @@ func TestIsText(t *testing.T) {
 	}
 }
 
+// TestPreviewKindForAppliesSizeLimit 守住预览体积闸的口径。
+//
+// 为什么重要：这道闸拦的是"把整个文件读进浏览器"，两个入口
+// （登录预览 / 免登录分享）共用它。判定顺序也有意为之 ——
+// 先判体积再看格式，超大文件无论格式一律 too-large。
+func TestPreviewKindForAppliesSizeLimit(t *testing.T) {
+	const max = int64(20) << 20
+
+	// 1) 上限内照常按格式判定。
+	if got := PreviewKindFor(".pdf", max, max); got != "pdf" {
+		t.Fatalf("恰好等于上限应照常预览，实际 %q", got)
+	}
+	if got := PreviewKindFor(".docx", 1<<20, max); got != "docx" {
+		t.Fatalf("上限内的 docx 应照常预览，实际 %q", got)
+	}
+
+	// 2) 超出上限：一律 too-large，与格式无关（含内联型与库解析型）。
+	for _, ext := range []string{".pdf", ".mp4", ".png", ".docx", ".xlsx", ".pptx", ".txt", ".svg"} {
+		if got := PreviewKindFor(ext, max+1, max); got != PreviewTooLarge {
+			t.Fatalf("超过上限的 %s 应判为 too-large，实际 %q", ext, got)
+		}
+	}
+
+	// 3) 顺序：超大 + 旧版 Office 应是 too-large，而不是 legacy-office。
+	//    对超大文件来说"请下载"本来就是结论，不必再劝用户换格式。
+	if got := PreviewKindFor(".doc", max+1, max); got != PreviewTooLarge {
+		t.Fatalf("超限的 .doc 应判为 too-large（体积优先于格式），实际 %q", got)
+	}
+	//    上限内的 .doc 仍应是 legacy-office（别把格式提示弄丢）。
+	if got := PreviewKindFor(".doc", 1<<20, max); got != "legacy-office" {
+		t.Fatalf("上限内的 .doc 应保持 legacy-office，实际 %q", got)
+	}
+
+	// 4) maxBytes <= 0 表示不限制：再大也照样按格式预览。
+	if got := PreviewKindFor(".pdf", 1<<40, 0); got != "pdf" {
+		t.Fatalf("上限为 0（不限制）时应照常预览，实际 %q", got)
+	}
+	if got := PreviewKindFor(".pdf", 1<<40, -1); got != "pdf" {
+		t.Fatalf("上限为负数应视为不限制，实际 %q", got)
+	}
+}
+
 func TestWalkFilesAndDirSize(t *testing.T) {
 	root := t.TempDir()
 	st, _ := New(root)

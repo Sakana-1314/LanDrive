@@ -115,7 +115,10 @@ func (h *Handler) PreviewInfo(c *gin.Context) {
 		failErr(c, err, "查询文件失败")
 		return
 	}
-	kind := storage.PreviewKind(f.Ext)
+	// 体积上限来自系统配置：超限的文件不下发给浏览器渲染（见 storage.PreviewKindFor）。
+	// 注意这**只影响预览**，下载接口不设这道闸 —— 大文件下到本地看没问题。
+	cfg := h.set.Get()
+	kind := storage.PreviewKindFor(f.Ext, f.SizeBytes, cfg.PreviewMaxSizeBytes())
 	ok(c, gin.H{
 		"id":          f.ID,
 		"name":        f.OriginalNam,
@@ -124,7 +127,7 @@ func (h *Handler) PreviewInfo(c *gin.Context) {
 		"mime":        f.Mime,
 		"kind":        kind,
 		"content_url": fmt.Sprintf("/api/files/%d/content", f.ID),
-		"note":        previewNote(kind, f.Ext),
+		"note":        previewNote(kind, f.SizeBytes, cfg.PreviewMaxSizeBytes()),
 	})
 }
 
@@ -137,8 +140,17 @@ func isTruthyQuery(v string) bool {
 	return false
 }
 
-func previewNote(kind, ext string) string {
+// previewNote 给出"为什么不能预览、该怎么办"的说明。
+//
+// 异常态必须说清原因与做法：超限的文件如果把按钮灰掉却不解释，
+// 用户只会以为坏了 —— 这里明确告诉他体积上限是多少、下载即可。
+func previewNote(kind string, sizeBytes, maxBytes int64) string {
 	switch kind {
+	case storage.PreviewTooLarge:
+		return fmt.Sprintf(
+			"该文件 %s，超过在线预览上限 %s，请下载后查看",
+			fmtBytes(sizeBytes), fmtBytes(maxBytes),
+		)
 	case "legacy-office":
 		return "旧版 Office 二进制格式（.doc/.xls/.ppt）无法在浏览器中直接解析，请下载后查看，或用 Office 另存为 .docx/.xlsx/.pptx 再上传"
 	case "unsupported":
@@ -236,7 +248,12 @@ func (h *Handler) serveFile(c *gin.Context, asAttachment bool) {
 	if ctype == "" {
 		ctype = "application/octet-stream"
 	}
-	inline := !asAttachment && storage.IsInlinePreviewable(f.Ext)
+	// 体积超限的类型不再内联：/preview 已经把 kind 标成 too-large，但用户
+	// 仍可能直接请求本接口（或拿旧链接），这里必须自己兜住 —— 否则"预览上限"
+	// 只是一句提示，拦不住浏览器去渲染超大文件。降级成附件后下载照旧可用。
+	inline := !asAttachment &&
+		storage.IsInlinePreviewable(f.Ext) &&
+		h.set.Get().PreviewSizeAllowed(f.SizeBytes)
 	if !inline {
 		ctype = "application/octet-stream"
 	}

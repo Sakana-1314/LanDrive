@@ -276,7 +276,9 @@ func (s *Service) Resolve(ctx context.Context, token string) (*Resolved, error) 
 		out.SizeBytes = f.SizeBytes
 		out.Mime = f.Mime
 		out.Ext = f.Ext
-		out.Kind = storage.PreviewKind(f.Ext)
+		// 与登录态预览共用同一套体积规则：免登录链接不该成为绕过预览上限的后门。
+		// 分享页拿不到超限文件的内联内容，但仍可下载（下载接口不设这道闸）。
+		out.Kind = storage.PreviewKindFor(f.Ext, f.SizeBytes, s.set.Get().PreviewMaxSizeBytes())
 
 	case model.ShareTargetFolder:
 		if sh.FolderID == nil {

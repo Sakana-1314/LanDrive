@@ -225,7 +225,8 @@ func (h *Handler) ShareDownload(c *gin.Context) {
 //
 // 安全约束与登录态预览完全一致：只有 storage.IsInlinePreviewable 允许的类型
 // 才内联，其余强制附件下发 —— 否则免登录链接可能变成"托管并执行任意 HTML/SVG"
-// 的入口。
+// 的入口。体积上限同样要在这里兜住：只在 /preview 的返回值里写 kind=too-large
+// 是不够的，用户直接扒出 /content 地址仍然会让浏览器去渲染超大文件。
 func (h *Handler) SharePreview(c *gin.Context) {
 	token := c.Param("token")
 	res, err := h.shares.Resolve(c.Request.Context(), token)
@@ -242,7 +243,9 @@ func (h *Handler) SharePreview(c *gin.Context) {
 		failErr(c, err, "文件不存在或已被清理")
 		return
 	}
-	inline := sharePreviewable(f.Ext)
+	// 超限即降级为附件：下载仍然可用，只是不再由浏览器内联渲染。
+	tooLarge := !h.set.Get().PreviewSizeAllowed(f.SizeBytes)
+	inline := sharePreviewable(f.Ext) && !tooLarge
 	if inline {
 		c.Header("Content-Disposition", contentDisposition("inline", f.OriginalNam, f.Ext))
 	} else {

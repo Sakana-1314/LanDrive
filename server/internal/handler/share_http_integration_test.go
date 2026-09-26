@@ -102,7 +102,7 @@ func newHTTPEnv(t *testing.T) *httpEnv {
 	if err != nil {
 		t.Fatalf("签发令牌: %v", err)
 	}
-	return &httpEnv{engine: engine, st: st, disk: disk, maint: maintSvc, user: u, token: tok}
+	return &httpEnv{engine: engine, st: st, disk: disk, maint: maintSvc, set: set, user: u, token: tok}
 }
 
 // do 发一个请求。token 为空表示**不带 Authorization 头**（模拟外部访客）。
@@ -324,6 +324,141 @@ func TestSharePreviewStaysInlineSafe(t *testing.T) {
 		}
 		if ct := w.Header().Get("Content-Type"); strings.Contains(ct, "svg") || strings.Contains(ct, "html") {
 			t.Fatalf("%s 不应以可执行类型下发，实际 Content-Type=%q", c.ext, ct)
+		}
+	}
+}
+
+// TestPreviewSizeLimitBlocksBothPaths 守住"可预览文件大小限制"。
+//
+// 需求：新增可预览文件大小限制，默认 20MB。
+//
+// 这条测三件事，缺一不可：
+//  1. 登录态的 /preview 对超限文件给出 kind=too-large（前端据此改走下载）；
+//  2. 免登录分享同样受限 —— 否则公开链接成了绕过预览上限的后门；
+//  3. **两个 /content 接口都不能再内联下发超限文件**。只改 /preview 的返回值
+//     是不够的：用户可以自己扒出 content_url（或拿一条旧链接）让浏览器去渲染
+//     超大文件，"限制"就只剩一句提示。下载能力必须保留（降级为附件）。
+func TestPreviewSizeLimitBlocksBothPaths(t *testing.T) {
+	e := newHTTPEnv(t)
+	ctx := context.Background()
+
+	// 把预览上限压到 1MB，省得在测试里造几十 MB 的字节。
+	oneMB := 1
+	if _, err := e.set.Update(ctx, settings.Patch{PreviewMaxSizeMB: &oneMB}); err != nil {
+		t.Fatalf("设置预览上限: %v", err)
+	}
+
+	// 2MB 的 PDF（属于可内联类型，才是真正要拦的对象）。
+	big := e.mkFile(t, "大文件.pdf", ".pdf", strings.Repeat("P", 2<<20))
+	small := e.mkFile(t, "小文件.pdf", ".pdf", "%PDF-1.4 tiny")
+
+	// --- 1) 登录态 /preview ---
+	var info map[string]any
+	{
+		w := e.do(t, "GET", "/api/files/"+itoa(big.ID)+"/preview", e.token, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("preview 失败 code=%d body=%s", w.Code, w.Body.String())
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
+			t.Fatalf("解析 preview 响应: %v", err)
+		}
+	}
+	if got := info["kind"]; got != storage.PreviewTooLarge {
+		t.Fatalf("超限文件应返回 kind=%s，实际 %v", storage.PreviewTooLarge, got)
+	}
+	// 文案要说清原因与做法（异常态不能只给个空提示）。
+	note, _ := info["note"].(string)
+	if !strings.Contains(note, "下载") {
+		t.Fatalf("超限提示应引导用户下载，实际 note=%q", note)
+	}
+	// 上限内的文件不受影响。
+	{
+		w := e.do(t, "GET", "/api/files/"+itoa(small.ID)+"/preview", e.token, "")
+		var smallInfo map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &smallInfo); err != nil {
+			t.Fatalf("解析 preview 响应: %v", err)
+		}
+		if got := smallInfo["kind"]; got != "pdf" {
+			t.Fatalf("上限内的文件应照常预览，实际 kind=%v", got)
+		}
+	}
+
+	// --- 3a) 登录态 /content：超限必须降级为附件 ---
+	{
+		w := e.do(t, "GET", "/api/files/"+itoa(big.ID)+"/content", e.token, "")
+		if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
+			t.Fatalf("超限文件的 content 必须以附件下发，实际 Content-Disposition=%q", cd)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/octet-stream" {
+			t.Fatalf("超限文件的 content 不应给出可渲染 MIME，实际 %q", ct)
+		}
+	}
+	// 上限内的仍应内联（别把正常预览一起关了）。
+	{
+		w := e.do(t, "GET", "/api/files/"+itoa(small.ID)+"/content", e.token, "")
+		if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, "inline") {
+			t.Fatalf("上限内的文件应内联，实际 Content-Disposition=%q", cd)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/pdf" {
+			t.Fatalf("上限内的 PDF 应以 application/pdf 下发，实际 %q", ct)
+		}
+	}
+	// **下载**不受限制：显式走 /download 仍然拿得到原件。
+	{
+		w := e.do(t, "GET", "/api/files/"+itoa(big.ID)+"/download", e.token, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("下载超限文件应仍然可用，实际 code=%d", w.Code)
+		}
+		if !strings.Contains(w.Header().Get("Content-Disposition"), "attachment") {
+			t.Fatalf("下载必须是附件形式")
+		}
+	}
+
+	// --- 2 & 3b) 免登录分享路径 ---
+	created := e.createShare(t, "file", big.ID, "")
+	token, _ := created["token"].(string)
+	if token == "" {
+		t.Fatalf("创建分享未返回 token: %v", created)
+	}
+	{
+		w := e.do(t, "GET", "/api/s/"+token, "", "")
+		var res map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatalf("解析分享响应: %v", err)
+		}
+		if got := res["kind"]; got != storage.PreviewTooLarge {
+			t.Fatalf("分享页对超限文件应返回 kind=%s，实际 %v", storage.PreviewTooLarge, got)
+		}
+	}
+	{
+		w := e.do(t, "GET", "/api/s/"+token+"/content", "", "")
+		if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
+			t.Fatalf("免登录 content 对超限文件必须以附件下发，实际 %q", cd)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/octet-stream" {
+			t.Fatalf("免登录 content 不应给出可渲染 MIME，实际 %q", ct)
+		}
+	}
+	{
+		w := e.do(t, "GET", "/api/s/"+token+"/download", "", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("分享下载应仍然可用，实际 code=%d", w.Code)
+		}
+	}
+
+	// --- 上限设为 0 = 不限制：超限文件恢复预览 ---
+	zero := 0
+	if _, err := e.set.Update(ctx, settings.Patch{PreviewMaxSizeMB: &zero}); err != nil {
+		t.Fatalf("设置预览上限为 0: %v", err)
+	}
+	{
+		w := e.do(t, "GET", "/api/files/"+itoa(big.ID)+"/preview", e.token, "")
+		var res map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatalf("解析 preview 响应: %v", err)
+		}
+		if got := res["kind"]; got != "pdf" {
+			t.Fatalf("上限为 0（不限制）时超限文件应照常预览，实际 kind=%v", got)
 		}
 	}
 }

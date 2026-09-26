@@ -79,6 +79,19 @@ const canPreviewInline = computed(() => {
   return k === 'image' || k === 'pdf' || k === 'video' || k === 'audio'
 })
 
+/**
+ * 不能内联预览时的解释。
+ * 超限的文件仍可下载，但必须说明"为什么没给我看"——否则链接接收者
+ * 只会以为分享坏了。超限是与"格式不支持"不同的原因，文案要分开。
+ */
+const noPreviewHint = computed(() => {
+  if (!info.value || info.value.target_type === 'folder' || canPreviewInline.value) return ''
+  if (info.value.kind === 'too-large') {
+    return `文件 ${formatBytes(info.value.size_bytes)}，超过在线预览上限，下载后查看即可`
+  }
+  return '该格式不支持在线预览，下载后查看即可'
+})
+
 function copyLink() {
   navigator.clipboard
     ?.writeText(window.location.href)
@@ -160,6 +173,9 @@ onMounted(load)
           <video v-if="info.kind === 'video'" :src="contentUrl" controls />
           <audio v-else :src="contentUrl" controls />
         </div>
+
+        <!-- 不能在线预览：说清原因（格式不支持 / 体积超限），下载入口就在下方 -->
+        <p v-if="noPreviewHint" class="share-note">{{ noPreviewHint }}</p>
 
         <div class="share-actions">
           <n-button tag="a" :href="downloadUrl" type="primary" size="large" block>
@@ -247,6 +263,17 @@ onMounted(load)
   margin: 0 0 8px;
   color: var(--color-text-muted);
   font-size: 14px;
+}
+
+/* 不能在线预览的说明：异常态必须说清原因，用带底色的提示条而不是一行小字 */
+.share-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  color: var(--color-text);
+  background: var(--color-panel);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .share-target {

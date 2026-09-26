@@ -27,7 +27,7 @@ import { CloudDoneOutline } from '@vicons/ionicons5'
 import { adminScanStorage, adminSettings, adminUpdateSettings, errMsg, uploadConfig } from '@/api'
 import { applyUploadConfig } from '@/stores/user'
 import type { OrphanReport, Settings } from '@/api/types'
-import { formatTime } from '@/utils/format'
+import { formatBytes, formatTime } from '@/utils/format'
 import { useIsMobile } from '@/utils/themeState'
 
 const message = useMessage()
@@ -39,7 +39,9 @@ const form = ref<Settings>({
   retention_days: 15,
   trash_days: 7,
   chunk_size_mb: 4,
-  upload_enabled: true
+  upload_enabled: true,
+  preview_max_size_mb: 20,
+  permanent_quota_mb: 102400
 })
 const loading = ref(false)
 const saving = ref(false)
@@ -81,6 +83,16 @@ async function save() {
     message.warning('分片大小需在 1 - 64 MB 之间')
     return
   }
+  // 0 是合法值：表示不限制预览体积（与后端 settings 的边界一致）。
+  if (form.value.preview_max_size_mb < 0 || form.value.preview_max_size_mb > 102400) {
+    message.warning('可预览上限需在 0 - 102400 MB 之间（0 表示不限制）')
+    return
+  }
+  // 0 同样合法：表示关闭「设为永久」这个功能。
+  if (form.value.permanent_quota_mb < 0 || form.value.permanent_quota_mb > 104857600) {
+    message.warning('永久空间配额需在 0 - 104857600 MB 之间（0 表示关闭永久功能）')
+    return
+  }
   saving.value = true
   try {
     const next = await adminUpdateSettings({
@@ -89,7 +101,9 @@ async function save() {
       retention_days: form.value.retention_days,
       trash_days: form.value.trash_days,
       chunk_size_mb: form.value.chunk_size_mb,
-      upload_enabled: form.value.upload_enabled
+      upload_enabled: form.value.upload_enabled,
+      preview_max_size_mb: form.value.preview_max_size_mb,
+      permanent_quota_mb: form.value.permanent_quota_mb
     })
     form.value = next
     syncAllowAll()
@@ -126,6 +140,27 @@ const extPreview = computed(() => {
 /** 到期流程示意：两个天数是先后关系，纯靠标签看不出顺序。 */
 const retentionHint = computed(
   () => `上传 ${form.value.retention_days} 天 → 回收站 ${form.value.trash_days} 天 → 彻底删除`
+)
+
+/**
+ * 预览策略示意：把"超限会怎样"写出来。
+ * 光给一个数字，管理员无法判断超限文件是被拒绝还是仍能下载 ——
+ * 而这两者的差别正是这条配置最容易被误解的地方（下载**始终**不受影响）。
+ */
+const previewHint = computed(() =>
+  form.value.preview_max_size_mb > 0
+    ? `${form.value.preview_max_size_mb} MB 以内可在线预览，超出只能下载`
+    : '不限制预览体积（大文件可能拖慢浏览器）'
+)
+
+/**
+ * 永久空间示意：说明"全站共享一个池"与"0 = 关闭"。
+ * 这两点都反直觉，且直接决定用户能不能把文件设成永久 —— 必须写出来。
+ */
+const permanentHint = computed(() =>
+  form.value.permanent_quota_mb > 0
+    ? `全站共享 ${formatBytes(form.value.permanent_quota_mb * 1024 * 1024)}，超出后无法再设为永久`
+    : '已关闭「设为永久」，所有文件都按保留天数到期'
 )
 
 // --- 存储一致性检查 ---
@@ -225,6 +260,36 @@ onMounted(load)
           <n-input-number v-model:value="form.chunk_size_mb" class="num-input" :min="1" :max="64">
             <template #suffix>MB</template>
           </n-input-number>
+        </n-form-item>
+
+        <n-form-item label="可预览上限">
+          <n-input-number
+            v-model:value="form.preview_max_size_mb"
+            class="num-input"
+            :min="0"
+            :max="102400"
+          >
+            <template #suffix>MB</template>
+          </n-input-number>
+        </n-form-item>
+
+        <n-form-item label="预览策略">
+          <n-tag size="small" :bordered="false">{{ previewHint }}</n-tag>
+        </n-form-item>
+
+        <n-form-item label="永久空间配额">
+          <n-input-number
+            v-model:value="form.permanent_quota_mb"
+            class="num-input"
+            :min="0"
+            :max="104857600"
+          >
+            <template #suffix>MB</template>
+          </n-input-number>
+        </n-form-item>
+
+        <n-form-item label="永久空间">
+          <n-tag size="small" :bordered="false">{{ permanentHint }}</n-tag>
         </n-form-item>
 
         <n-form-item label="允许上传">

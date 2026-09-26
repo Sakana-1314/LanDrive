@@ -61,18 +61,92 @@ const FILES = NAMES.map((name, i) => ({
   created_at: new Date(Date.now() - i * 3600000).toISOString(),
   updated_at: new Date().toISOString(),
   days_left: i + 1,
+  // 与后端 files.decorate 一致：permanent = expires_at 为空
+  permanent: false,
+  is_mine: (i % 3) + 1 === 1,
   can_edit: i % 3 === 0,
   preview_kind: 'none'
 }))
 
+// 超过默认预览上限（20MB）的文件：用来端到端验证「超限不给预览、但可下载」。
+// 单独造一个而不是放大现有 fixture —— 现有用例都基于它们的小体积。
+FILES.push({
+  id: 100,
+  owner_id: 1,
+  owner_name: USERS[0].name,
+  owner_employee_no: USERS[0].employee_no,
+  original_name: '超大巡检视频.mp4',
+  ext: '.mp4',
+  size_bytes: 30 * 1024 * 1024, // 30MB > 20MB 默认上限
+  mime: 'video/mp4',
+  sha256: 'b'.repeat(64),
+  rel_path: 'users/1/100',
+  status: 'active',
+  expires_at: null,
+  deleted_at: null,
+  purge_at: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+  days_left: 5,
+  permanent: false,
+  is_mine: true,
+  can_edit: true,
+  preview_kind: 'none'
+})
+
+// 已经设为永久的文件：expires_at 为 null、days_left=0。
+// 用来验证前端**不会**把 days_left=0 显示成"今天到期"（这正是最容易犯的错）。
+FILES.push({
+  id: 101,
+  owner_id: 1,
+  owner_name: USERS[0].name,
+  owner_employee_no: USERS[0].employee_no,
+  original_name: '永久保留的台账.xlsx',
+  ext: '.xlsx',
+  size_bytes: 4096,
+  mime: 'application/octet-stream',
+  sha256: 'c'.repeat(64),
+  rel_path: 'users/1/101',
+  status: 'active',
+  expires_at: null,
+  deleted_at: null,
+  purge_at: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+  days_left: 0,
+  permanent: true,
+  is_mine: true,
+  can_edit: true,
+  preview_kind: 'none'
+})
+
 const SETTINGS = {
   max_file_size_mb: 500, allowed_extensions: '', retention_days: 15,
-  trash_days: 7, chunk_size_mb: 4, upload_enabled: true
+  trash_days: 7, chunk_size_mb: 4, upload_enabled: true,
+  // 与 server/internal/settings 保持一致（预览默认 20MB、永久配额默认 100G）
+  preview_max_size_mb: 20,
+  permanent_quota_mb: 102400
 }
 
 const json = (res, data, status = 200) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(data))
+}
+
+/**
+ * 人类可读的体积文案，口径与 server/internal/handler.fmtBytes 一致。
+ * 预览超限的提示里要带上具体数值，两边算法不同会让前端检查对不上真实文案。
+ */
+const fmtBytes = (n) => {
+  const unit = 1024
+  if (n < unit) return `${n} B`
+  let div = unit
+  let exp = 0
+  for (let v = n / unit; v >= unit; v /= unit) {
+    div *= unit
+    exp++
+  }
+  return `${(n / div).toFixed(1)} ${'KMGTPE'[exp]}B`
 }
 
 /** 读请求体（POST/PUT 用）。 */
@@ -174,9 +248,22 @@ http
       } else if (['.doc', '.xls', '.ppt'].includes(ext)) kind = 'legacy-office'
       else if (TEXT.includes(ext)) kind = 'text'
       else kind = 'unsupported'
+      // 体积闸必须在这里也判一次：口径与 server/internal/storage.PreviewKindFor
+      // 一致（先判体积、再判格式），否则前端检查测到的是假路径。
+      const previewMax = Number(SETTINGS.preview_max_size_mb || 0)
+      let note = ''
+      if (previewMax > 0 && f.size_bytes > previewMax * 1024 * 1024) {
+        kind = 'too-large'
+        // 文案口径与 server/internal/handler.previewNote 保持一致
+        note = `该文件 ${fmtBytes(f.size_bytes)}，超过在线预览上限 ${fmtBytes(previewMax * 1024 * 1024)}，请下载后查看`
+      } else if (kind === 'legacy-office') {
+        note = '旧版 Office 二进制格式（.doc/.xls/.ppt）无法在浏览器中直接解析，请下载后查看，或用 Office 另存为 .docx/.xlsx/.pptx 再上传'
+      } else if (kind === 'unsupported') {
+        note = '该格式暂不支持在线预览，请下载后查看'
+      }
       return json(res, {
         id: f.id, name: f.original_name, ext: f.ext, size_bytes: f.size_bytes,
-        mime: f.mime, kind, content_url: `/api/files/${f.id}/content`, note: ''
+        mime: f.mime, kind, content_url: `/api/files/${f.id}/content`, note
       })
     }
     const contentMatch = p.match(/^\/api\/files\/(\d+)\/content$/)
@@ -351,7 +438,17 @@ http
       })
     if (p === '/api/admin/users') return json(res, { items: USERS, total: USERS.length, page: 1, page_size: 20 })
     if (p === '/api/admin/files') return json(res, { items: FILES, total: FILES.length, page: 1, page_size: 20 })
-    if (p === '/api/admin/settings') return json(res, SETTINGS)
+    if (p === '/api/admin/settings') {
+      if (req.method === 'PUT') {
+        return readBody(req).then((body) => {
+          let payload = {}
+          try { payload = JSON.parse(body || '{}') } catch { /* 保持空 */ }
+          Object.assign(SETTINGS, payload)
+          return json(res, SETTINGS)
+        })
+      }
+      return json(res, SETTINGS)
+    }
 
     json(res, { error: 'not found', path: p }, 404)
   })

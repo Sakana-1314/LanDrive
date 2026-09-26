@@ -419,6 +419,8 @@ type settingsPatch struct {
 	TrashDays         *int    `json:"trash_days"`
 	ChunkSizeMB       *int    `json:"chunk_size_mb"`
 	UploadEnabled     *bool   `json:"upload_enabled"`
+	PreviewMaxSizeMB  *int    `json:"preview_max_size_mb"`
+	PermanentQuotaMB  *int    `json:"permanent_quota_mb"`
 }
 
 // UpdateSettings 处理 PUT /api/admin/settings（部分更新）。
@@ -434,6 +436,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		TrashDays:         req.TrashDays,
 		ChunkSizeMB:       req.ChunkSizeMB,
 		UploadEnabled:     req.UploadEnabled,
+		PreviewMaxSizeMB:  req.PreviewMaxSizeMB,
+		PermanentQuotaMB:  req.PermanentQuotaMB,
 	}
 	if patch.Empty() {
 		fail(c, http.StatusBadRequest, "没有需要更新的配置项")
