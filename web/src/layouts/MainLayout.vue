@@ -28,12 +28,13 @@ import {
   NLayoutSider,
   NMenu,
   useDialog,
+  type MenuNodeProps,
   type MenuOption
 } from 'naive-ui'
 import {
   CheckmarkOutline,
   DocumentTextOutline,
-  EllipsisHorizontalOutline,
+  EllipsisHorizontal,
   FolderOpenOutline,
   HardwareChipOutline,
   LinkOutline,
@@ -89,12 +90,32 @@ function closeDrawerOnMobile() {
 }
 
 /**
+ * 给用户子 tab 的行挂上 `owner-tab` 类名。
+ *
+ * 为什么需要：n-menu 的选项没有「把 extra 顶到行尾」的能力 —— 行是
+ * grid `auto 1fr auto`，「1fr」是标题列，而 extra 是**标题列内部**的元素，
+ * 因此它只会紧跟在姓名后面。实测 208px 侧栏里触发键落在 x≈64~83，
+ * 而行内容区一直到 x=190：看着像"粘在名字上"，不像行尾的操作入口。
+ * 位置改由 styles.css 的 `.n-menu-item.owner-tab` 规则统一接管
+ * （标题单元格改 flex、extra 用 margin-left:auto 吃掉剩余空间），
+ * 桌面侧栏与移动端抽屉共用同一条规则。
+ */
+const ownerTabNodeProps: MenuNodeProps = (option) =>
+  option.ownerTab ? { class: 'owner-tab' } : {}
+
+/**
  * 用户子 tab 右侧的「更多」菜单。
  *
  * 为什么从图钉图标改成下拉菜单：图钉是个只能表达一件事的按钮，
  * 而且点下去到底是"置顶"还是"取消置顶"只能靠悬停提示区分，
  * 触屏上根本没有提示。收进菜单后「置顶」成了一个**勾选状态项**，
  * 当前是否已置顶一眼可见。
+ *
+ * 图标用**实心**的 EllipsisHorizontal（三个实心圆点）而不是 Outline 细线版：
+ * 侧栏行窄、图标只有 18px，细线三点在浅色底上几乎看不清，用户认不出这是
+ * "更多"。实心三点是这类菜单的通用形状，一眼就懂。
+ * 位置（贴行尾）由 styles.css 的 `.n-menu-item.owner-tab` 规则统一给，
+ * 不在这里写内联样式 —— 内联的 absolute 还要自己算行宽，窄屏就错位了。
  */
 const OwnerMenu = defineComponent({
   props: { owner: { type: Object as PropType<OwnerAggregate>, required: true } },
@@ -142,21 +163,14 @@ const OwnerMenu = defineComponent({
         {
           default: () =>
             h(
-              NIcon,
+              'button',
               {
-                size: 15,
-                // 行内样式而非 scoped class：该节点由渲染函数产出，
-                // n-menu 的 extra 区域不受 scoped 属性覆盖（同一文件既有的做法）。
-                style: {
-                  // 已置顶时点亮触发键：否则置顶状态只能在菜单展开后才看得到
-                  color: props.owner.pinned ? 'var(--color-primary)' : 'var(--color-text-muted)',
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  // 触控目标偏小，补一点内边距，移动端也好点
-                  padding: '2px',
-                  borderRadius: '4px'
-                },
+                type: 'button',
+                // 类名由 styles.css 的全局规则接管（见 `.owner-menu-trigger`）：
+                // 该节点由渲染函数产出，scoped 样式覆盖不到它。
+                class: ['owner-menu-trigger', { 'is-pinned': props.owner.pinned }],
                 title: '更多',
+                'aria-label': '更多',
                 // 拦掉冒泡，否则点它会被 n-menu 当成"选中该项"而触发导航
                 // （下拉自己的 click 监听挂在触发键上，不受冒泡被拦的影响）。
                 onClick: (e: MouseEvent) => {
@@ -164,7 +178,7 @@ const OwnerMenu = defineComponent({
                   e.preventDefault()
                 }
               },
-              { default: () => h(EllipsisHorizontalOutline) }
+              h(NIcon, { size: 18 }, { default: () => h(EllipsisHorizontal) })
             )
         }
       )
@@ -189,7 +203,10 @@ const menuOptions = computed<MenuOption[]>(() => {
       }),
     key: `/files?owner=${o.user_id}`,
     // 「更多」下拉里勾选置顶
-    extra: () => h(OwnerMenu, { owner: o })
+    extra: () => h(OwnerMenu, { owner: o }),
+    // 给这一类行挂类名的标记：唯一的消费方是 ownerTabNodeProps + styles.css，
+    // 把「更多」触发键顶到行尾。
+    ownerTab: true
   }))
 
   const allFilesLink = () =>
@@ -398,6 +415,7 @@ function confirmLogout() {
         :collapsed-width="64"
         :collapsed-icon-size="20"
         :options="menuOptions"
+        :node-props="ownerTabNodeProps"
         :indent="18"
       />
     </n-layout-sider>
@@ -471,6 +489,7 @@ function confirmLogout() {
         v-model:expanded-keys="expandedKeys"
         :value="activeKey"
         :options="menuOptions"
+        :node-props="ownerTabNodeProps"
         :indent="18"
         @update:value="closeDrawerOnMobile"
       />

@@ -275,3 +275,74 @@ body {
   color: var(--color-primary);
   font-weight: 650;
 }
+
+/* ---------- 用户子 tab 的「更多」触发键（贴行尾 + 实心三点）----------
+ *
+ * 必须放全局样式：节点由 MainLayout 的渲染函数产出、挂在 n-menu 内部，
+ * 组件的 scoped 属性覆盖不到它（同上面的 .all-files-link）。
+ *
+ * 为什么要改位置：n-menu 把 extra 放在**标题单元格内部**，而那里的内容
+ * 是「<a>姓名 + extra」的普通行内流 —— extra 只会紧跟在姓名后面。
+ * 实测 208px 侧栏里触发键落在 x≈64~83，而标题单元格一直铺到 x=190：
+ * 看起来是"粘在名字上"，不像行尾的操作入口。
+ *
+ * 改法：把标题单元格改成 flex，extra 用 `margin-left: auto` 吃掉剩余空间，
+ * 于是触发键贴到该行的右边界（x=190，与其它行的文字右缘对齐）。
+ * 只作用于挂了 owner-tab 的行，行高 / aria-selected / 选中态 / hover 背景
+ * 都仍由 Naive 自己管，没有改动。
+ *
+ * 图标是实心三点（EllipsisHorizontal）：细线版在 18px 下几乎看不清，
+ * 用户认不出这是"更多"。这里不写内联样式，颜色与圆角一律走设计令牌。
+ */
+.n-menu-item.owner-tab .n-menu-item-content-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 姓名是可伸缩项：长姓名在自己的格子内省略号收尾，不会钻到触发键下面 */
+.n-menu-item.owner-tab .n-menu-item-content-header > a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.n-menu-item.owner-tab .n-menu-item-content-header__extra {
+  flex: none;
+  /* 关键：把触发键顶到行尾，而不是紧跟姓名 */
+  margin-left: auto;
+}
+
+.owner-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 触控目标 28px：比图标本身大、移动端点得中，又不撑高 42px 的行 */
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--color-text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+/* hover 时画出底色与描边：说明"这里可以点"，而不是一个纯装饰的点 */
+.owner-menu-trigger:hover,
+.owner-menu-trigger:focus-visible {
+  border-color: var(--color-primary-border);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  outline: none;
+}
+
+/* 已置顶时点亮：不展开菜单也能看出这一项被置顶了 */
+.owner-menu-trigger.is-pinned {
+  color: var(--color-primary);
+}
+
